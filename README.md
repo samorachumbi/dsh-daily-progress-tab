@@ -1,0 +1,379 @@
+# dsh-daily-progress-tab
+
+Daily planning, venture tracking and a post-launch feedback loop for DSH — **in its own browser
+tab**, driven by the harness agent as much as by hand.
+
+Open **`http://127.0.0.1:3080/daily-progress-tab/ui`** in a tab and drag it to a second
+screen. There is no dock widget, no composer strip, and no harness UI footprint at all.
+
+Forked from [`omdsh-dev/dsh-daily-progress`](https://github.com/omdsh-dev/dsh-daily-progress)
+at `bedbd28de735ee1c49d684d922a3d8009bd21431` (see `UPSTREAM_COMMIT.txt`).
+
+> **Session context lives in the vault, not here.** The decision record, the ranking method, the
+> feedback-loop design and the bug census are in
+> `~/projects/deepseek-test/second-brain/` — project card `projects/dsh-daily-progress-tab.md`,
+> methods `concepts/project-prioritisation-method.md` and `concepts/project-feedback-loop.md`,
+> and `concepts/bug-census.md`. Read those before changing behaviour.
+
+## What you get
+
+- **Now** — the *one* task being worked on, as a filled banner at the top. Every task row on the page
+  has a ▶ that picks it; finishing or deleting it clears the pick automatically
+- **Today** — checklist with add / check off / edit / remove, **↑↓ to order it**, ▶ to work on a task,
+  ➔ to push it to tomorrow
+- **Tomorrow** — write the evening plan; unfinished items carry over automatically
+- **Pick a task** — the menu of everything that is *not* today, in two halves:
+  - **Backlog** — candidate tasks, **undated**, attached to a project and waiting there
+  - **On other days** — undone tasks sitting on another day (amber = overdue), with ➔ to pull one
+    into today
+  Each row offers ▶ *work on this now* (schedules it **and** picks it), ➔ *schedule only*, ✓ *mark it
+  done where it is*, and × *drop it*
+- **Focus** — the one project being executed, with its tasks pulled out of today and tomorrow
+- **Projects** — a ranked board in **three lifecycle columns**:
+  - **Working** — `active`: being built now, ranked by expected money per day of build effort
+  - **Pending** — `idea` / `parked`: waiting, and *keeping its score and rank* — deferred is not the
+    same as unmeasured
+  - **Live** — `shipped`: in the world and being **measured** (see the feedback loop below)
+  Each project card carries a one-line **Backlog** input, so candidates are authored where the
+  project is rather than in a separate list
+- **Thermometer** — today's completion rate as a bar
+- **Streak** — consecutive achieved days; an unfinished today *pauses* it, never breaks it
+- **Week heatmap** — Monday-first, counts only through today
+- **21:00 reminder** — opt-in; fires if tomorrow still has no plan
+- **Section headings are coloured bubbles** — one hue each, so a card is findable at a glance
+
+### Colour is two families, and the split is load-bearing
+
+`--ok` / `--warn` / `--danger` / `--accent` are **decoration**: fills, borders, bars. They are chosen
+to look right as areas, which makes them far too light to read as text — measured on a rendered page,
+amber text was **2.39:1** and green **3.73:1** against the light theme's ground, where small text
+needs 4.5:1. The `-ink` variants are the same hues darkened (light) or lightened (dark) until every
+one clears the bar: after the fix the same text measures **8.85:1** and **9.71:1**.
+
+**Never use a decoration token for text, and never use an ink token as a fill** — white on the dark
+theme's light-red ink is 2.77:1, a mistake made and caught while fixing this. Both rules are enforced
+by `tests/ui.test.ts`, which also computes the contrast of every text token against both surfaces of
+both themes, so a palette change cannot regress it silently.
+
+**A state class must not rely on source order.** Two single-class rules have equal specificity, so
+whichever is declared later wins. `.spark-due` declared amber for the triage warning and rendered
+`--muted`, because `.closed-line` came later in the stylesheet: 0 amber pixels on the page where a
+sibling amber line measured 827. Qualify the modifier — `.closed-line.spark-due` cannot be beaten by
+order — and note that a dead declaration is indistinguishable from a working one in the source, so an
+emphasis rule has to be *measured* on the render. A third gate in `tests/ui.test.ts` now fails on any
+text colour that is overruled on every element using it.
+
+Achieved day = at least one item and all of them done. Past days are read-only.
+
+### Why "Pick a task" exists
+
+Before it, a task could only come into existence **already attached to a date**. Everything you could
+work on was therefore something the board had already put in front of you, and the ranking — not the
+operator — decided the menu. The backlog is the missing piece: an **undated** candidate task that
+waits on its project until someone pulls it onto a day. That is what makes "work on any task I
+choose" mean something.
+
+The three surfaces are independent, and each answers a different question:
+
+| question | surface |
+|---|---|
+| what am I doing *right now*? | **Now** (one task, picked, cleared when it is finished) |
+| what *could* I do for a project? | **Backlog** (undated, per project) |
+| what did I already plan that is not today? | **Pool** ("On other days") |
+| in what order will I do today? | the **↑↓** arrows — the array order *is* the priority |
+
+## Ranking
+
+`score = (revenuePerMonth × confidence) × timeDiscount × urgency ÷ effortDays`, where
+`timeDiscount = 1 / (1 + ttfdDays / 30)` and `urgency = 1 + 0.15 × (forcingFunction − 1)` — WSJF
+adapted so **time to the first dollar is a first-class term**. Units are "expected currency per
+month, per day of build effort", so the order literally answers *what makes money fastest for the
+work it costs*.
+
+An unestimated project is **never guessed into the order** — with no revenue, effort or
+time-to-first-dollar it sorts after every scored project and is labelled **UNRANKED**. The
+seven-dimension rubric is a **gate, not a score**: the lowest dimension is reported as
+`weakest: <dimension>` rather than averaged away. Method: `concepts/project-prioritisation-method.md`.
+
+## The feedback loop (Live)
+
+A shipped project is not finished, it is **live**. Each project carries a `metricName` — the *one*
+number that matters — and gets **check-ins**: one dated record per period holding the money taken
+that period, the metric, paying customers, what progressed, **hurdles**, **corrections**, and a
+verdict of `continue · fix · pause · kill`, judged against the kill-switch agreed before launch.
+
+- A re-check-in on the same day **updates that day** rather than adding another, so money can never
+  be double-counted by a restatement.
+- No check-in for more than **7 days** flags the card **STALE** — an unmeasured project cannot be
+  judged.
+- **Deleting a project deletes its check-ins.** Leaving them behind kept a deleted venture's
+  money and verdicts on disk, invisible on the board — found by dumping the raw store, and now
+  covered by a probe that reads the table directly rather than the snapshot.
+- A **`kill` verdict is an action**: it sets the status to `killed`, the project leaves the board,
+  and the vault register keeps the reason. Killed projects are counted under the column, never
+  silently hidden.
+- Everything shown is derived on read from the check-ins, so the summary cannot drift from them.
+
+Design and reasoning: `concepts/project-feedback-loop.md`.
+
+## Sparks — the business ideas the feedback produces
+
+A check-in does not only say whether the venture is working; it says what *else* is true. A hurdle
+that keeps recurring is often a product of its own, and a customer request that does not fit the
+current offer is a second business. Those ideas are captured as **sparks**, listed on the live card
+under `IDEAS SPARKED BY THIS FEEDBACK` and counted at the foot of the Live column.
+
+- Capture is **one more list on `daily_checkin`** (`sparks: ["..."]`), so it costs one word more than
+  a hurdle — or `daily_spark` for an idea that strikes on its own, with no live project behind it.
+- A spark is keyed by its **own id**, and its source is a **soft reference that is allowed to dangle**:
+  `sourceProjectName` is frozen at capture, so the record still says where it came from afterwards.
+- **Deleting a project keeps its sparks** — the one deliberate exception to "deleting a parent deletes
+  its children". A check-in is a child of the project; a spark is a lead it produced, and a venture
+  that dies of a hurdle is telling you the hurdle *is* the business. Probes assert they survive.
+- Two exits, and no third state: **promote** turns it into a Pending project with no estimates, so it
+  starts **UNRANKED**; **dismiss** closes it and **requires a reason**, so a dead end stays dead.
+- **A spark never closes a hurdle.** Only `daily_checkin_item` does. Otherwise "write down an idea"
+  silently counts as "fixed the problem" and the fix list stops being a work list.
+- **Re-running a check-in replaces only the OPEN sparks** — a decision already taken is not undone by
+  restating the feedback that produced it.
+- An idea left undecided for more than **14 days** trips a triage warning on the card and in the
+  column, because a capture surface with no clock only ever grows.
+
+Design and reasoning: `concepts/sparks.md`.
+
+## Driving it by asking (agent tools)
+
+The plugin registers **25 tools**, so the plan, the board, the backlog and the feedback loop can all be managed
+conversationally:
+
+| Tool | What it does |
+|---|---|
+| `daily_plan` | read the WHOLE board: now, today, tomorrow, the pool and the backlog |
+| `daily_add_task` | schedule a task on today or tomorrow |
+| `daily_set_task_done` | complete (`done:true`) or reopen (`done:false`) a task |
+| `daily_edit_task` | rewrite a task's text |
+| `daily_move_task` | move a task to another date — defer, reschedule, or pull one forward with `fromDate` |
+| `daily_reorder_task` | move a task one place up or down in its list |
+| `daily_now` | pick, change or clear the ONE task being worked on |
+| `daily_remove_task` | delete a task |
+| `daily_suggest` | attach a row of suggestion chips to a task |
+| `daily_update_task` | change a task's summary box or project link |
+| `daily_backlog_add` | add an **unscheduled** candidate task to a project |
+| `daily_backlog_plan` | schedule a candidate onto a day (optionally `select:true` to start it now) |
+| `daily_backlog_remove` | drop a candidate that is not wanted after all |
+| `daily_projects` | read the ranked board |
+| `daily_add_project` | add a venture (name, who it serves, estimates, rubric) |
+| `daily_update_project` | change estimates, rubric, status, kill-switch, `metricName` |
+| `daily_select_project` | choose what is being executed (`idea`/`parked` → `active`) |
+| `daily_plan_project` | break a project into linked daily tasks in one call |
+| `daily_live` | read the Live board: money, metric, hurdles, corrections, verdicts, staleness |
+| `daily_checkin` | log a check-in (money, metric, progress, hurdles, corrections, verdict, **sparks**) |
+| `daily_checkin_item` | close or reopen one hurdle or correction |
+| `daily_sparks` | read the spark board: open ideas, their triage clock, and every dismissal with its reason |
+| `daily_spark` | capture ONE business idea, optionally attributed to the venture whose feedback produced it |
+| `daily_spark_promote` | turn an idea into a Pending project (UNRANKED until it is estimated) |
+| `daily_spark_dismiss` | close an idea without starting it — a reason is required |
+
+Every task tool addresses a task by `itemId` **or** by `task`, a unique case-insensitive substring
+of its text — the model usually knows what a task says, not its UUID. An ambiguous substring
+is **refused with the candidate list**, never guessed. Projects resolve by `projectId` or `project`
+(a unique substring of the name), and **`daily_plan_project` resolves a name to an id first** —
+passing a name straight to `addItem` (which links by id) would silently create unlinked tasks.
+
+Tools are registered inside `ctx.inject(['tools'], …)`, not in the plugin's required `inject`:
+a profile composed without a tool registry still boots the planner, it just gets no tools.
+
+### Timezone
+
+Browser requests carry the user's own zone and local date. Agent calls carry neither, so they
+resolve "today" from the plugin's config, which defaults to the host's zone:
+
+```yaml
+- id: daily-progress-tab
+  config:
+    timezone: Africa/Nairobi
+```
+
+## Suggestion chips
+
+`daily_suggest` attaches up to 6 chips to a task; the page renders them under it and clicking
+one applies it **server-side** (`applySuggestion`), so the semantics live in one place. An
+applied chip is consumed, and `info` chips never round-trip — they just reveal their detail.
+
+| action | needs | effect |
+|---|---|---|
+| `complete` | — | mark the task done |
+| `defer` | `date` (`YYYY-MM-DD` or `tomorrow`) | move the task to that date |
+| `split` | `items` (1–20 texts) | replace the task with those tasks |
+| `retitle` | `text` | rewrite the task |
+| `drop` | — | delete the task |
+| `info` | `detail` | nothing — explains, shown inline |
+
+The model authors the content; the plugin never calls a model itself.
+
+## Routes
+
+| Route | Purpose |
+|---|---|
+| `GET /daily-progress-tab/ui` | the planner page (also at the bare prefix) |
+| `GET /daily-progress-tab/state?localDate=YYYY-MM-DD&tz=IANA` | snapshot (includes `pending`, `live` and the derived `monitoring` per project) |
+| `POST /daily-progress-tab/mutate` | `{localDate, tz, op, payload}` |
+
+Ops (17): `toggleItem` · `addItem` · `removeItem` · `editItemText` · `updateItem` · `setTomorrow` ·
+`clearToday` · `moveItem` · `splitItem` · `setSuggestions` · `applySuggestion` · `addProject` ·
+`updateProject` · `removeProject` · `selectProject` · `logCheckin` · `checkinItem`
+
+`match` is the text matcher; `text` is always a text *value*. Keeping them separate matters:
+letting `text` serve both made `editItemText` read one field for two purposes and silently no-op.
+In a partial update, **`undefined` means "leave it" and `null` means "clear it"** — collapsing the
+two is what made a summary-only edit fail with `empty_text`.
+
+All routes are loopback-only. The prefix, the bundle row id, and the storage domain name are all
+`-tab`-suffixed so this fork can coexist with an upstream install (domains may be opened once per
+process, and `webServer.register` throws on a duplicate prefix).
+
+## Storage
+
+Domain `daily_progress_tab`, **version 1** — deliberately not bumped despite tables and fields being
+added since. Bumping it would make the existing medium reject at open, i.e. the plugin would refuse
+to start on the very store it created. New tables simply load empty, and new **schema fields are
+optional** so records written earlier still validate. Tables: `plans` (one record per
+`<scope>:<date>`), `projects`, `checkins` (one record per `<projectId>:<date>`), `backlog` (one
+record per candidate task id), plus a domain `global` holding the selected project **and** the
+selected task.
+
+Two rules learned the hard way here:
+
+- **The global is read-then-merged on every write.** `global.set` replaces the whole record, so
+  writing the project choice would silently drop the task choice — the fields are independent
+  selections, and `patchGlobal` re-reads before it writes. A probe asserts that picking a task does
+  not clear the selected project.
+- **Deleting a project deletes what belonged to it** — its check-ins *and* its backlog candidates.
+  Orphans are invisible on the board but still on disk, read by anything walking the table (and by
+  the next backup dump). Both are probed against the raw table, because the snapshot cannot see them
+  by construction.
+
+The selected task is stored as an **id plus a hint date**, and is re-resolved on every read
+(hint day → today → the whole ±14-day pool window). A moved, completed or deleted task therefore
+cannot leave a dangling "working on" pointer; a task that resolves to `done` is refused outright
+rather than shown as the one you are on.
+
+## Install
+
+```bash
+dsh plugin --profile web add /home/samora/projects/plugins/dsh-daily-progress-tab
+```
+
+Then restart: `dsh web`. Open `/daily-progress-tab/ui`.
+
+⚠️ **Never run a package manager inside `~/.dsh/profiles/*`** — it materialises a second
+`@deepseek-ai/dsh-*` tree, and two copies mean two `Symbol` instances and every tool call dying
+with `Cannot read properties of undefined (reading 'prepare')`. Copy the package in as real files.
+
+## Develop
+
+```bash
+npm run typecheck   # tsc against the REAL @deepseek-ai types
+npm test            # 54 unit tests (scoring, ranking, monitoring, metrics, page structure, contrast)
+npm run build       # tsc → lib/
+npm run probe       # 188 live probes: real cordis, real json backend, real tool registry
+npm run render      # serve the page on a bare http server for pixel verification (see below)
+```
+
+### Verifying the page without a DSH instance
+
+A visual change has to be **rendered and measured** — reading the CSS proves nothing. That normally
+means a scratch DSH instance, but a scratch instance is a whole profile composition and does not
+survive a reboot. For a change that is purely presentational, nothing about the DSH host matters:
+what has to be real is the PAGE and the DATA.
+
+`npm run render` mounts the same three real pieces the plugin uses — `createHandlers` over
+`createPlanner` over the real json store — and stubs only the host's route registration:
+
+```bash
+PORT=3099 STORE_DIR=/tmp/dpt-boot/storages npm run render
+```
+
+Then screenshot it — **in both themes**, because the page declares `prefers-color-scheme: light dark`
+and the render follows the OS, so a single screenshot silently verifies half its surfaces:
+
+```bash
+# light and dark, deterministically, whichever way the OS is set
+chromium --headless=new --no-sandbox --disable-gpu --window-size=1400,4300 \
+  --virtual-time-budget=14000 --blink-settings=preferredColorScheme=1 \
+  --screenshot=$HOME/shots/light.png http://127.0.0.1:3099/daily-progress-tab/ui
+# …and preferredColorScheme=0 for dark
+```
+
+Note the screenshot path: Chromium here is snap-confined, so it writes `/tmp` screenshots into its
+own private namespace and is denied `~/.cache`. Use a visible path under `$HOME`, and check the file
+exists rather than trusting the "written to file" message.
+
+`probe` mounts the plugin on a real cordis `Context` with real service names, so a wrong name in
+`inject` fails the probe rather than passing silently — and it drives every tool, every suggestion
+action, the whole check-in loop and the whole choosing flow end-to-end. **Every logic bug in this
+fork was found by the probe; none by re-reading code.** Keep it that way: a fixed bug gets a new
+probe.
+
+`tests/ui.test.ts` covers the page, which nothing else can: it has no build step and no imports, so a
+typo in an element id renders **nothing** and fails silently. It asserts that the template literal
+contains no backtick and no interpolation marker, that every id the script looks up is defined, and
+that every bubble heading has a style rule. Both of those checks have already caught real breakage.
+
+For the whole chain (snapshot → typecheck → tests → probes → build → deploy → restart → health →
+screenshot) use the vault's reusable runner:
+
+```bash
+bash ~/projects/deepseek-test/second-brain/scripts/build-loop.sh \
+  -d ~/projects/plugins/dsh-daily-progress-tab \
+  -k /tmp/dpt-boot/profiles/audit2/node_modules/dsh-daily-progress-tab \
+  -P 3099 -r /daily-progress-tab/ui --pidfile /tmp/dpt-boot.pid \
+  --dsh-home /tmp/dpt-boot --profile audit2
+```
+
+UI changes should be **rendered and looked at**, not reasoned about from the CSS — see
+`skills/jarvis-ui-build-SKILL.md` step 6 and `snippets/bubble-heading-css.md`.
+
+## Differences from upstream
+
+**Fixed — each aborted DSH's boot:**
+
+1. `dsh.client` manifest + `exports["./client"]` removed. Upstream declared a client half whose
+   `lib/client.js` was never built; `dsh-client-modules` then failed the whole plugin tree with
+   `client bundles not found`.
+2. `inject` corrected from `httpServer` to **`webServer`**. `httpServer` does not exist in the
+   harness; the entry stayed pending and `assertEntriesActivated` aborted the boot.
+
+**Fixed — runtime defects:**
+
+3. **Lost-update race.** Mutations hand-rolled get→put; 8 concurrent adds persisted 1 item. Every
+   read-modify-write now runs on one process-wide write chain (8/8 persist).
+4. **Unhandled rejection.** The rollover write was fired with `void` and no catch — a backend
+   failure raised an unhandled rejection (fatal by default) while the request returned 200.
+5. **IPv6 loopback rejected.** Bracket-stripping ran before the port split, collapsing
+   `[::1]:3080` to `''`; the `'::1'` branch was dead code.
+6. `removeItem` reported success for a nonexistent id.
+7. `setTomorrow` accepted duplicate ids, so one toggle flipped several items.
+8. The GET path did not bound `tz`, persisting arbitrarily long strings.
+9. Internal error text was returned to the browser.
+
+**Fixed — contract and hygiene:**
+
+10. Real `peerDependencies` on the harness packages + `@deepseek-ai/cordis` types, replacing a
+    hand-written `declare module 'cordis'` shim. The shim is *why* upstream shipped a service name
+    that does not exist: it invented `httpServer`, so `tsc` passed. With real types this fork's
+    typecheck fails immediately on a wrong service name.
+11. `zod` 3 → 4, matching the host's `^4.4.3`.
+12. `lib/` is committed, so a clean checkout runs.
+
+**Added:** the standalone planner tab (no client bundle, so nothing for `dsh-client-modules` to
+compose), the ranked projects board, the Working/Pending/Live columns, the check-in feedback loop
+with staleness flagging, a per-project backlog, a task-level Now pick, the 21 agent tools, suggestion
+chips, bubble headings, `timezone` config,
+and the optional-`tools` registration.
+
+Known gap: no `src/invariant.ts` / `./invariant` export (the harness package convention).
+
+## Licence
+
+BSD-3-Clause, as upstream. Upstream copyright © 2026 Zacklinkk.

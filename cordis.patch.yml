@@ -1,0 +1,9 @@
+# dsh-daily-progress-tab bundle patch.
+#
+# The host half mounts the storage domain and serves BOTH the JSON API and the
+# planner page. There is deliberately NO `dsh.client` half: the UI lives in its
+# own browser tab at <origin>/daily-progress-tab/ui, so the harness UI is never
+# touched and no client bundle has to be composed.
+- insert:
+    - id: daily-progress-tab
+      name: dsh-daily-progress-tab
