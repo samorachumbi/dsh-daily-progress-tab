@@ -281,7 +281,7 @@ toolCtx.plugin({
 await new Promise((r2) => setTimeout(r2, 500))
 
 check('plugin activates WITH a tools service', toolActivated, true)
-const expectedNames = ['daily_add_project', 'daily_add_task', 'daily_backlog_add', 'daily_backlog_plan', 'daily_backlog_remove', 'daily_checkin', 'daily_checkin_item', 'daily_edit_task', 'daily_live', 'daily_move_task', 'daily_now', 'daily_plan', 'daily_plan_project', 'daily_projects', 'daily_remove_task', 'daily_reorder_task', 'daily_select_project', 'daily_set_task_done', 'daily_spark', 'daily_spark_dismiss', 'daily_spark_promote', 'daily_sparks', 'daily_suggest', 'daily_update_project', 'daily_update_task']
+const expectedNames = ['daily_add_project', 'daily_add_task', 'daily_backlog_add', 'daily_backlog_plan', 'daily_backlog_remove', 'daily_checkin', 'daily_checkin_item', 'daily_edit_task', 'daily_live', 'daily_move_task', 'daily_now', 'daily_plan', 'daily_plan_project', 'daily_plugin', 'daily_plugin_remove', 'daily_plugins', 'daily_projects', 'daily_remove_task', 'daily_reorder_task', 'daily_select_project', 'daily_set_task_done', 'daily_spark', 'daily_spark_dismiss', 'daily_spark_promote', 'daily_sparks', 'daily_suggest', 'daily_update_project', 'daily_update_task']
 check('all agent tools registered', [...toolDefs.keys()].sort(), expectedNames)
 
 const runTool = async (name, args) => {
@@ -462,6 +462,31 @@ liveView = await runTool('daily_checkin', { project: 'Unestimated', date: '2026-
 check('re-stating the check-in does not resurrect a promoted idea', liveView.projects[0].sparkOpen, 0)
 check('an unknown spark id is refused',
   await runTool('daily_spark_promote', { sparkId: 'not-a-spark' }).then(() => 'no-error', (e) => String(e.message).split(':')[0]), 'spark_not_found')
+
+// ---- the portfolio register, through the tools
+let folio = await runTool('daily_plugins', {})
+check('the register starts empty', [folio.authored, folio.plugins.length], [0, 0])
+folio = await runTool('daily_plugin', {
+  name: 'dsh-demo', origin: 'ours', visibility: 'showcase', licence: 'MIT',
+  hasLicenseFile: true, hasReadme: true, hasScreenshot: true, sourceOutsideProfile: true,
+  leakScanPassed: true, gitReady: true, verifiedAt: expectedToday,
+})
+check('daily_plugin records one plugin', folio.authored, 1)
+check('a fully verified plugin is ready to publish', [folio.ready, folio.plugins[0].blockers], [1, []])
+check('the facts are dated, so they can expire', folio.plugins[0].verifiedDaysAgo, 0)
+folio = await runTool('daily_plugin', { name: 'dsh-demo', hasScreenshot: false })
+check('daily_plugin UPDATES the same record rather than adding a second', folio.plugins.length, 1)
+check('a missing screenshot blocks it', folio.plugins[0].blockers.length, 1)
+check('and it is no longer ready', folio.ready, 0)
+folio = await runTool('daily_plugin', { name: 'dsh-somebody-elses', origin: 'third-party' })
+check('third-party work is not publishable at all', folio.plugins.find((p) => p.name === 'dsh-somebody-elses').publishable, false)
+check('and is never counted as authored', folio.authored, 1)
+check('a new plugin is internal unless told otherwise',
+  folio.plugins.find((p) => p.name === 'dsh-somebody-elses').visibility, 'internal')
+folio = await runTool('daily_plugin_remove', { plugin: 'dsh-somebody-elses' })
+check('removing takes it out of the register', folio.plugins.length, 1)
+check('an unknown plugin is refused',
+  await runTool('daily_plugin_remove', { plugin: 'ghost' }).then(() => 'no-error', (e) => String(e.message).split(':')[0]), 'plugin_not_found')
 
 // The plugin must still boot when NO tool registry exists (optional dependency).
 const bareCtx = new Context()
@@ -843,6 +868,92 @@ r = await post({ localDate: PICK_DATE, tz: TZ, op: 'removeProject', payload: { p
 check('removeProject drops its candidates from the board', r.parsed.snapshot.backlog, [])
 const orphanBacklog = [...openDomain.table('backlog').entries()].filter(([, b]) => b.projectId === pickProject.id)
 check('removeProject leaves no orphaned backlog rows', orphanBacklog.length, 0)
+
+// ------------------------------------------- the plugin portfolio register
+// The gate is the point of this feature: a plugin LIST contains other people's
+// work, so publishing has to be impossible rather than merely discouraged.
+r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'addPlugin', payload: {
+  name: 'dsh-cost-bubble', origin: 'ours', visibility: 'showcase', title: 'Cost bubble',
+  licence: 'MIT', sourcePath: '~/projects/plugins/dsh-cost-bubble', installed: true,
+  hasLicenseFile: true, hasReadme: true, sourceOutsideProfile: true, leakScanPassed: true,
+  gitReady: true, verifiedAt: PROJ_DATE,
+} })
+let folio2 = r.parsed.snapshot.portfolio
+check('a plugin is registered', [folio2.counts.total, folio2.counts.authored], [1, 1])
+check('nothing is published yet', folio2.counts.published, 0)
+// Every fact is recorded except the screenshot, so exactly that one blocks it.
+check('a missing screenshot is the one blocker left', folio2.entries[0].blockers.length, 1)
+check('so it is not ready', folio2.counts.ready, 0)
+
+r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'updatePlugin', payload: { plugin: 'cost-bubble', hasScreenshot: true } })
+folio2 = r.parsed.snapshot.portfolio
+check('recording the last fact makes it ready', [folio2.counts.ready, folio2.entries[0].blockers], [1, []])
+
+check('a duplicate name is refused, so the register cannot double-count',
+  (await post({ localDate: PROJ_DATE, tz: TZ, op: 'addPlugin', payload: { name: 'dsh-cost-bubble', origin: 'ours' } })).parsed.code, 'invalid_payload')
+check('an invented origin is refused',
+  (await post({ localDate: PROJ_DATE, tz: TZ, op: 'addPlugin', payload: { name: 'dsh-x', origin: 'borrowed' } })).parsed.code, 'invalid_payload')
+
+// The fail-safe default: nothing becomes publishable by omission.
+r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'addPlugin', payload: { name: 'dsh-default-test', origin: 'ours' } })
+check('a plugin added without a visibility is INTERNAL',
+  r.parsed.snapshot.portfolio.entries.find((e) => e.name === 'dsh-default-test').visibility, 'internal')
+check('and therefore not publishable',
+  r.parsed.snapshot.portfolio.entries.find((e) => e.name === 'dsh-default-test').publishable, false)
+
+// Someone else's plugin, sitting in the same list.
+r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'addPlugin', payload: {
+  name: 'dsh-better-sidebar', origin: 'third-party', visibility: 'showcase', licence: 'MIT', installed: true,
+} })
+folio2 = r.parsed.snapshot.portfolio
+check('third-party work is refused by the gate even if marked showcase', 
+  folio2.entries.find((e) => e.name === 'dsh-better-sidebar').publishable, false)
+check('and the count still says two authored, not three', folio2.counts.authored, 2)
+check('the third-party count is separate', folio2.counts.thirdParty, 1)
+
+// A fork: publishable, but only with attribution recorded.
+r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'addPlugin', payload: {
+  name: 'dsh-daily-progress-tab', origin: 'fork', visibility: 'showcase', licence: 'BSD-3-Clause',
+  hasLicenseFile: true, hasReadme: true, hasScreenshot: true, sourceOutsideProfile: true,
+  leakScanPassed: true, gitReady: true, verifiedAt: PROJ_DATE,
+} })
+folio2 = r.parsed.snapshot.portfolio
+check('a fork without an upstream is blocked', 
+  folio2.entries.find((e) => e.name === 'dsh-daily-progress-tab').blockers.length, 1)
+check('and the blocker names the attribution',
+  /upstream/.test(folio2.entries.find((e) => e.name === 'dsh-daily-progress-tab').blockers[0]), true)
+r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'updatePlugin', payload: {
+  plugin: 'daily-progress-tab', upstream: 'omdsh-dev/dsh-daily-progress@bedbd28',
+} })
+check('recording the upstream clears it',
+  r.parsed.snapshot.portfolio.entries.find((e) => e.name === 'dsh-daily-progress-tab').blockers, [])
+check('three authored now counts the fork', r.parsed.snapshot.portfolio.counts.authored, 3)
+
+// Facts expire: a verification older than VERIFY_STALE_DAYS is a blocker, so a
+// pass recorded months ago cannot carry a publish decision today.
+r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'updatePlugin', payload: { plugin: 'cost-bubble', verifiedAt: '2026-01-01' } })
+const staleEntry = r.parsed.snapshot.portfolio.entries.find((e) => e.name === 'dsh-cost-bubble')
+check('a stale verification blocks it again', staleEntry.blockers.length, 1)
+check('and says to re-verify', /re-verify/.test(staleEntry.blockers[0]), true)
+await post({ localDate: PROJ_DATE, tz: TZ, op: 'updatePlugin', payload: { plugin: 'cost-bubble', verifiedAt: PROJ_DATE } })
+
+// Publishing is a recorded state, not a to-do list that never empties.
+r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'updatePlugin', payload: {
+  plugin: 'cost-bubble', status: 'public', publicUrl: 'https://github.com/example/dsh-cost-bubble', publishedAt: PROJ_DATE,
+} })
+folio2 = r.parsed.snapshot.portfolio
+check('a published plugin is counted as published', folio2.counts.published, 1)
+check('and leaves the ready queue', folio2.counts.ready, 1)
+check('and blocks on nothing any more',
+  folio2.entries.find((e) => e.name === 'dsh-cost-bubble').blockers, [])
+
+// Removal is a register edit and nothing else.
+r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'removePlugin', payload: { plugin: 'dsh-default-test' } })
+check('removing a row drops the count', r.parsed.snapshot.portfolio.counts.total, 3)
+check('an unknown plugin is refused',
+  (await post({ localDate: PROJ_DATE, tz: TZ, op: 'removePlugin', payload: { plugin: 'never-heard-of-it' } })).parsed.code, 'plugin_not_found')
+check('an ambiguous match is refused',
+  (await post({ localDate: PROJ_DATE, tz: TZ, op: 'removePlugin', payload: { plugin: 'dsh-' } })).parsed.code, 'invalid_payload')
 
 // ---------------------------------------------------------------- durability
 check('domain/changed emitted for durable writes', changes.length > 0, true)

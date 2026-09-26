@@ -144,6 +144,11 @@ export interface Snapshot {
      * clock. Derived on every read, like the monitoring summary.
      */
     sparks: SparkBoard;
+    /**
+     * The plugin portfolio register: one row per plugin authored or installed,
+     * with the derived count and the per-plugin publish gate.
+     */
+    portfolio: Portfolio;
 }
 /** Which day a mutation addresses. */
 export type PlanTarget = 'today' | 'tomorrow';
@@ -322,6 +327,78 @@ export interface SparkBoard extends ProjectSparks {
     /** How many sparks have actually been decided (promoted + dismissed). */
     decided: number;
 }
+export type PluginOrigin = 'ours' | 'fork' | 'third-party';
+export type PluginVisibility = 'showcase' | 'internal';
+export type PluginStatus = 'local' | 'public';
+/**
+ * One plugin in the portfolio register.
+ *
+ * The `origin` x `visibility` pair is the load-bearing part, and it is what
+ * makes a publish affordance safe: only `ours`/`fork` AND `showcase` is
+ * publishable at all. Everything else is refused by the gate rather than by
+ * anyone remembering.
+ *
+ * The boolean facts (`hasLicenseFile`, `leakScanPassed`, ...) are stored WITH
+ * `verifiedAt`, because a fact about a tree is only true as of the day it was
+ * checked. See `publishBlockers` — an old verification is itself a blocker.
+ */
+export interface PluginRecord {
+    id: string;
+    /** Package name, e.g. `dsh-cost-bubble`. Unique: the register keys on it. */
+    name: string;
+    origin: PluginOrigin;
+    visibility: PluginVisibility;
+    status: PluginStatus;
+    title?: string;
+    summary?: string;
+    /** A fork's upstream repository and commit, e.g. `omdsh-dev/x@bedbd28`. */
+    upstream?: string;
+    licence?: string;
+    sourcePath?: string;
+    publicUrl?: string;
+    publishedAt?: string;
+    /** The published plugin is registered with the harness. */
+    installed?: boolean;
+    hasLicenseFile?: boolean;
+    hasReadme?: boolean;
+    hasScreenshot?: boolean;
+    /** False when the only copy sits inside a profile's node_modules. */
+    sourceOutsideProfile?: boolean;
+    leakScanPassed?: boolean;
+    /** The day the leak scan last ran. */
+    leakScanAt?: string;
+    gitReady?: boolean;
+    /** The day ALL of the above were last checked against the tree. */
+    verifiedAt?: string;
+    notes?: string;
+    createdAt: string;
+    updatedAt: string;
+}
+/** A register row plus what the gate derived for it. Never stored. */
+export interface PortfolioEntry extends PluginRecord {
+    publishable: boolean;
+    /** Empty means ready to publish. */
+    blockers: string[];
+    verifiedDaysAgo: number | null;
+}
+/** The derived answer to "how many plugins have I created?". Never stored. */
+export interface PortfolioCounts {
+    total: number;
+    ours: number;
+    fork: number;
+    thirdParty: number;
+    /** ours + forks: the plugins this operator authored. */
+    authored: number;
+    internal: number;
+    published: number;
+    /** Publishable, not yet public, and no blockers left. */
+    ready: number;
+    installed: number;
+}
+export interface Portfolio {
+    entries: PortfolioEntry[];
+    counts: PortfolioCounts;
+}
 export interface RankedProject extends Project {
     score: ProjectScore;
     /**
@@ -376,9 +453,15 @@ export type MutateOp = 'toggleItem' | 'logCheckin' | 'checkinItem' | 'addItem' |
 /** Turn a spark into a pending project, UNRANKED until it is estimated. */
  | 'sparkPromote'
 /** Close a spark without starting it, recording why the option was burned. */
- | 'sparkDismiss';
+ | 'sparkDismiss'
+/** Add a plugin to the portfolio register. */
+ | 'addPlugin'
+/** Patch one plugin's record: verified facts, visibility, publication state. */
+ | 'updatePlugin'
+/** Remove a plugin from the register. Never touches the code. */
+ | 'removePlugin';
 /** Business error codes the routes and tools return. */
-export type MutateErrorCode = 'invalid_local_date' | 'invalid_tz' | 'unknown_op' | 'invalid_payload' | 'item_not_found' | 'suggestion_not_found' | 'project_not_found' | 'spark_not_found' | 'plan_locked' | 'too_many_items' | 'empty_text' | 'internal';
+export type MutateErrorCode = 'invalid_local_date' | 'invalid_tz' | 'unknown_op' | 'invalid_payload' | 'item_not_found' | 'suggestion_not_found' | 'project_not_found' | 'spark_not_found' | 'plugin_not_found' | 'plan_locked' | 'too_many_items' | 'empty_text' | 'internal';
 export type MutateResult = {
     ok: true;
     snapshot: Snapshot;

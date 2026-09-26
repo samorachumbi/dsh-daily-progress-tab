@@ -18,10 +18,12 @@ import { addDays, computeStreak, rollover, weekCells, weekRate } from './metrics
 import { DATE_RE, DEFAULT_SCOPE, isValidDateKey, recordKey } from './calendar.ts'
 import { CHECKIN_VERDICTS, MAX_CHECKIN_ITEMS, MAX_SUGGESTIONS } from './domain.ts'
 import type { DailyProgressDomainSpec } from './domain.ts'
-import { MAX_CHECKIN_TEXT, MAX_NAME, MAX_SPARKS, normalizeProject, rankProjects, scoreProject, sparkBoard } from './projects.ts'
+import { MAX_CHECKIN_TEXT, MAX_NAME, MAX_SPARKS, MAX_SUMMARY, normalizeProject, rankProjects, scoreProject, sparkBoard } from './projects.ts'
+import { MAX_PLUGIN_REF, PLUGIN_ORIGINS, PLUGIN_STATUSES, PLUGIN_VISIBILITIES, portfolioView } from './portfolio.ts'
 import type {
   BacklogItem, Checkin, CheckinItem, CheckinVerdict, DayPlan, MutateErrorCode, MutateOp, MutateResult,
-  PlanItem, PoolEntry, NowTask, Project, Snapshot, Spark, TaskSuggestion,
+  PlanItem, PluginOrigin, PluginRecord, PluginStatus, PluginVisibility, PoolEntry, NowTask, Project,
+  Snapshot, Spark, TaskSuggestion,
 } from './types.ts'
 
 export const MAX_ITEMS = 50
@@ -109,6 +111,95 @@ export function createPlanner(domainPromise: Promise<Domain<DailyProgressDomainS
   const saveCheckin = async (entry: Checkin): Promise<void> => {
     await (await checkinsTable()).put(checkinKey(entry.projectId, entry.date), entry)
   }
+
+  // ---- plugins: the portfolio register -------------------------------------
+  // Not a cache of what is installed: it is the record of what was AUTHORED,
+  // with the provenance and the licence, because those are the facts a publish
+  // decision rests on and neither is discoverable from the filesystem.
+  let pluginsPromise: Promise<KvTable<string, PluginRecord>> | null = null
+  const pluginsTable = (): Promise<KvTable<string, PluginRecord>> =>
+    (pluginsPromise ??= domainPromise.then((domain) => domain.table('plugins')))
+  const listPlugins = async (): Promise<PluginRecord[]> =>
+    [...(await pluginsTable()).entries()].map(([, plugin]) => plugin)
+  const readPlugin = async (id: unknown): Promise<PluginRecord | null> => {
+    if (typeof id !== 'string' || id.length === 0) return null
+    return (await pluginsTable()).get(id) ?? null
+  }
+  const savePlugin = async (plugin: PluginRecord): Promise<void> => {
+    await (await pluginsTable()).put(plugin.id, plugin)
+  }
+
+  /**
+   * Resolve a plugin by id, or by a unique case-insensitive substring of its
+   * NAME. The matcher is `plugin`, never `name`: `name` is the value field, and
+   * letting one field be both is the A4 trap that silently broke editItemText.
+   */
+  function resolvePlugin(all: PluginRecord[], payload: Record<string, unknown>): PluginRecord | Failed {
+    const id = payload.pluginId
+    if (typeof id === 'string' && id.length > 0) {
+      const found = all.find((plugin) => plugin.id === id)
+      return found ?? err('plugin_not_found', 'no plugin with id ' + id)
+    }
+    const match = payload.plugin
+    if (typeof match === 'string' && match.trim().length > 0) {
+      const needle = match.trim().toLowerCase()
+      const hits = all.filter((plugin) => plugin.name.toLowerCase().includes(needle))
+      if (hits.length === 0) return err('plugin_not_found', 'no plugin matching ' + JSON.stringify(match))
+      if (hits.length > 1) {
+        return err('invalid_payload', 'ambiguous: ' + hits.length + ' plugins match ' + JSON.stringify(match)
+          + ' — ' + hits.map((plugin) => plugin.name).join(', '))
+      }
+      return hits[0]!
+    }
+    return err('invalid_payload', 'pluginId or plugin required')
+  }
+
+  /**
+   * Patch a text field: `undefined` leaves it, `null` clears it, a string sets
+   * it. Collapsing the first two is what silently wiped fields in updateItem, so
+   * the distinction is made once, here, and every field uses it.
+   */
+  const pickText = (value: unknown, prior: string | undefined, max: number): string | undefined => {
+    if (value === undefined) return prior
+    if (value === null) return undefined
+    if (typeof value !== 'string') return prior
+    const trimmed = value.trim()
+    return trimmed.length === 0 ? undefined : trimmed.slice(0, max)
+  }
+  const pickBool = (value: unknown, prior: boolean | undefined): boolean | undefined =>
+    (typeof value === 'boolean' ? value : prior)
+  const pickEnum = <T extends string>(value: unknown, prior: T, allowed: readonly T[]): T =>
+    (typeof value === 'string' && (allowed as readonly string[]).includes(value) ? value as T : prior)
+
+  /**
+   * The optional half of a plugin record, defined ONCE: `addPlugin` passes no
+   * prior and `updatePlugin` passes the stored record, so a field cannot be
+   * added to one and forgotten in the other. `pickText` gives `undefined` =
+   * "leave as it was" and `null` = "clear it", the distinction that silently
+   * wiped fields in updateItem when it was collapsed.
+   */
+  const pluginFields = (
+    prior: PluginRecord | undefined,
+    payload: Record<string, unknown>,
+  ): Partial<PluginRecord> => ({
+    title: pickText(payload.title, prior?.title, MAX_NAME),
+    summary: pickText(payload.summary, prior?.summary, MAX_SUMMARY),
+    upstream: pickText(payload.upstream, prior?.upstream, MAX_PLUGIN_REF),
+    licence: pickText(payload.licence, prior?.licence, 64),
+    sourcePath: pickText(payload.sourcePath, prior?.sourcePath, MAX_PLUGIN_REF),
+    publicUrl: pickText(payload.publicUrl, prior?.publicUrl, MAX_PLUGIN_REF),
+    publishedAt: pickText(payload.publishedAt, prior?.publishedAt, 32),
+    leakScanAt: pickText(payload.leakScanAt, prior?.leakScanAt, 32),
+    verifiedAt: pickText(payload.verifiedAt, prior?.verifiedAt, 32),
+    notes: pickText(payload.notes, prior?.notes, MAX_SUMMARY),
+    installed: pickBool(payload.installed, prior?.installed),
+    hasLicenseFile: pickBool(payload.hasLicenseFile, prior?.hasLicenseFile),
+    hasReadme: pickBool(payload.hasReadme, prior?.hasReadme),
+    hasScreenshot: pickBool(payload.hasScreenshot, prior?.hasScreenshot),
+    sourceOutsideProfile: pickBool(payload.sourceOutsideProfile, prior?.sourceOutsideProfile),
+    leakScanPassed: pickBool(payload.leakScanPassed, prior?.leakScanPassed),
+    gitReady: pickBool(payload.gitReady, prior?.gitReady),
+  })
 
   // ---- sparks: business ideas sparked by live feedback ----------------------
   // Keyed by the spark's own id, never by project: see types.Spark for why a
@@ -335,6 +426,7 @@ export function createPlanner(domainPromise: Promise<Domain<DailyProgressDomainS
       pool,
       backlog: await listBacklog(),
       sparks: sparkBoard(await listSparks(), date),
+      portfolio: portfolioView(await listPlugins(), date),
     }
   }
 
@@ -1087,6 +1179,62 @@ export function createPlanner(domainPromise: Promise<Domain<DailyProgressDomainS
             updatedAt: nowIso,
           } as Checkin
           await saveCheckin(updated)
+          return done()
+        }
+
+        case 'addPlugin': {
+          const name = typeof payload.name === 'string' ? payload.name.trim().slice(0, MAX_NAME) : ''
+          if (name.length === 0) return err('invalid_payload', 'name is required')
+          const all = await listPlugins()
+          if (all.some((plugin) => plugin.name === name)) {
+            return err('invalid_payload', name + ' is already in the register — use updatePlugin')
+          }
+          if (payload.origin !== 'ours' && payload.origin !== 'fork' && payload.origin !== 'third-party') {
+            return err('invalid_payload', 'origin must be one of ' + PLUGIN_ORIGINS.join('|'))
+          }
+          const origin = payload.origin as PluginOrigin
+          await savePlugin({
+            id: randomUUID(),
+            name,
+            origin,
+            // The fail-safe default. Publishing is an explicit act: a plugin
+            // added without a visibility is internal, so no omission can put
+            // something of someone else's — or of ours that reads the vault —
+            // one click from a public push.
+            visibility: pickEnum(payload.visibility, 'internal', PLUGIN_VISIBILITIES),
+            status: pickEnum(payload.status, 'local', PLUGIN_STATUSES),
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            ...pluginFields(undefined, payload),
+          })
+          return done()
+        }
+
+        case 'updatePlugin': {
+          const all = await listPlugins()
+          const found = resolvePlugin(all, payload)
+          if (isFailed(found)) return found
+          const renamed = pickText(payload.name, found.name, MAX_NAME)
+          const updated: PluginRecord = {
+            ...found,
+            name: renamed ?? found.name,
+            origin: pickEnum(payload.origin, found.origin, PLUGIN_ORIGINS),
+            visibility: pickEnum(payload.visibility, found.visibility, PLUGIN_VISIBILITIES),
+            status: pickEnum(payload.status, found.status, PLUGIN_STATUSES),
+            updatedAt: nowIso,
+            ...pluginFields(found, payload),
+          }
+          await savePlugin(updated)
+          return done()
+        }
+
+        case 'removePlugin': {
+          const all = await listPlugins()
+          const found = resolvePlugin(all, payload)
+          if (isFailed(found)) return found
+          // The register is a record, not the code: removing a row never touches
+          // the plugin, its repository or its files.
+          await (await pluginsTable()).delete(found.id)
           return done()
         }
 

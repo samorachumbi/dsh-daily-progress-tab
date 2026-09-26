@@ -1,0 +1,62 @@
+/**
+ * The plugin portfolio register. Pure, no IO, unit-tested in
+ * tests/portfolio.test.ts — the planner, the tools and the page all consume it,
+ * so the count and the publish gate cannot differ between them.
+ *
+ * WHY A REGISTER AND A GATE, NOT A PUBLISH BUTTON. The obvious feature is "a
+ * button that publishes this plugin to my GitHub". That shape is wrong, and the
+ * reasons are encoded here rather than left to discipline:
+ *
+ *   - The list of INSTALLED plugins contains other people's work. A button on
+ *     that list is one click from publishing someone else's repository under
+ *     this operator's name. `origin` makes that impossible instead of merely
+ *     inadvisable: a third-party plugin has no publishable state at all.
+ *   - A push cannot be undone, and this machine holds material that must never
+ *     be public. So the gate reads STORED FACTS WITH DATES — `leakScanPassed`
+ *     is only true because a scan ran on a recorded day, and that day is shown
+ *     and expires. A gate that trusts a checkbox is not a gate.
+ *   - `visibility` is deliberately separate from `origin`: a plugin of ours that
+ *     reads the loan plan or the vault is `internal` for good, and it defaults
+ *     to `internal` so that nothing is publishable by accident — only by an
+ *     explicit act.
+ *
+ * The register answers the question actually asked — "how many plugins have I
+ * created?" — as a DERIVED count over records, so it can never be a number
+ * somebody typed.
+ * @module dsh-daily-progress-tab/portfolio
+ */
+import type { PluginRecord, Portfolio, PortfolioCounts } from './types.ts';
+/** Who wrote it. `fork` is ours-with-an-upstream: publishable, with attribution. */
+export declare const PLUGIN_ORIGINS: readonly ["ours", "fork", "third-party"];
+/**
+ * Whether this plugin may ever be published. Defaults to `internal` — the
+ * fail-safe direction: publishing is an explicit act, never an oversight.
+ */
+export declare const PLUGIN_VISIBILITIES: readonly ["showcase", "internal"];
+export declare const PLUGIN_STATUSES: readonly ["local", "public"];
+/** Longest upstream reference or URL kept on a record. */
+export declare const MAX_PLUGIN_REF = 300;
+/**
+ * Facts about a plugin expire. A leak scan that passed last year says nothing
+ * about the tree today, so an old verification is itself a blocker — the same
+ * discipline as STALE_CHECKIN_DAYS: a measurement you did not take is not a
+ * measurement.
+ */
+export declare const VERIFY_STALE_DAYS = 30;
+/** True when this plugin may ever be published, regardless of readiness. */
+export declare function isPublishable(plugin: PluginRecord): boolean;
+/**
+ * Every reason this plugin is not ready to publish, in the order they should be
+ * fixed. Empty means ready. A plugin that is already public has nothing to
+ * block, so it returns empty rather than re-litigating a finished decision.
+ */
+export declare function publishBlockers(plugin: PluginRecord, today?: string): string[];
+/** Whole days since the recorded facts were verified, or null when never/no date. */
+export declare function verificationAgeDays(plugin: PluginRecord, today: string): number | null;
+export declare function portfolioCounts(plugins: readonly PluginRecord[]): PortfolioCounts;
+/**
+ * The register as the page and the tools render it. Ordered by what to do next:
+ * unpublished first, then fewest blockers, then name — so the row that needs one
+ * more step sorts above the row that needs five.
+ */
+export declare function portfolioView(plugins: readonly PluginRecord[], today?: string): Portfolio;

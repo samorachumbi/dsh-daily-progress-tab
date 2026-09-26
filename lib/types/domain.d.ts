@@ -29,7 +29,7 @@ export declare const MAX_SUGGESTIONS = 6;
 export declare const MAX_CHECKIN_ITEMS = 20;
 /** The verdict vocabulary: what the check-in decided to DO about the project. */
 export declare const CHECKIN_VERDICTS: readonly ["continue", "fix", "kill", "pause"];
-/** The domain spec: one `plans` table per (scope, date), plus `projects`, `checkins`, `backlog` and `sparks`. */
+/** The domain spec: one `plans` table per (scope, date), plus `projects`, `checkins`, `backlog`, `sparks` and `plugins`. */
 export declare const dailyProgressDomain: {
     name: string;
     version: number;
@@ -174,6 +174,44 @@ export declare const dailyProgressDomain: {
                 }>;
                 promotedProjectId: z.ZodNullable<z.ZodString>;
                 dismissedReason: z.ZodNullable<z.ZodString>;
+                createdAt: z.ZodString;
+                updatedAt: z.ZodString;
+            }, z.core.$strip>;
+        };
+        plugins: {
+            valueSchema: z.ZodObject<{
+                id: z.ZodString;
+                name: z.ZodString;
+                origin: z.ZodEnum<{
+                    ours: "ours";
+                    fork: "fork";
+                    "third-party": "third-party";
+                }>;
+                visibility: z.ZodEnum<{
+                    showcase: "showcase";
+                    internal: "internal";
+                }>;
+                status: z.ZodEnum<{
+                    local: "local";
+                    public: "public";
+                }>;
+                title: z.ZodOptional<z.ZodString>;
+                summary: z.ZodOptional<z.ZodString>;
+                upstream: z.ZodOptional<z.ZodString>;
+                licence: z.ZodOptional<z.ZodString>;
+                sourcePath: z.ZodOptional<z.ZodString>;
+                publicUrl: z.ZodOptional<z.ZodString>;
+                publishedAt: z.ZodOptional<z.ZodString>;
+                installed: z.ZodOptional<z.ZodBoolean>;
+                hasLicenseFile: z.ZodOptional<z.ZodBoolean>;
+                hasReadme: z.ZodOptional<z.ZodBoolean>;
+                hasScreenshot: z.ZodOptional<z.ZodBoolean>;
+                sourceOutsideProfile: z.ZodOptional<z.ZodBoolean>;
+                leakScanPassed: z.ZodOptional<z.ZodBoolean>;
+                leakScanAt: z.ZodOptional<z.ZodString>;
+                gitReady: z.ZodOptional<z.ZodBoolean>;
+                verifiedAt: z.ZodOptional<z.ZodString>;
+                notes: z.ZodOptional<z.ZodString>;
                 createdAt: z.ZodString;
                 updatedAt: z.ZodString;
             }, z.core.$strip>;

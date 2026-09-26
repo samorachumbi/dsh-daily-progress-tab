@@ -141,9 +141,36 @@ under `IDEAS SPARKED BY THIS FEEDBACK` and counted at the foot of the Live colum
 
 Design and reasoning: `concepts/sparks.md`.
 
+## The plugin portfolio register
+
+Every plugin authored or installed is recorded once, with the facts a publish decision rests on:
+
+| field | why it is load-bearing |
+|---|---|
+| `origin` | `ours` / `fork` / `third-party`. **Only `ours` and `fork` can ever be published** |
+| `visibility` | `showcase` / `internal`. Defaults to **`internal`**, so nothing becomes publishable by omission |
+| `upstream` | a fork must record its upstream repo and commit, or the gate blocks it |
+| `licence`, `hasLicenseFile` | attribution is not optional |
+| `sourceOutsideProfile` | false means the only copy sits inside a profile's `node_modules` — a single point of failure |
+| `leakScanPassed` + `leakScanAt` | the scan must have passed for the **current** tree |
+| `verifiedAt` | every fact above expires: older than 30 days is a blocker, not a pass |
+
+The counts — `2 authored (0 published, 0 ready) · 1 third-party, never publishable · 2 installed` —
+are **derived** from the records on every read, so the number can never be one somebody typed.
+
+**This is a register with a gate, deliberately not a "publish" button.** A list of *installed*
+plugins contains other people's work, and a button on that list is one click from publishing someone
+else's repository under your own name. Here that is impossible rather than merely discouraged: a
+third-party plugin has no publishable state at all, and the card shows why in a muted tone — a fact,
+not a to-do list. Anything fixable is shown as `blocked:` in amber instead, so the two are never
+confused.
+
+Facts expire for the same reason: a leak scan that passed months ago says nothing about the tree
+today, which is exactly when a private path or a token gets committed.
+
 ## Driving it by asking (agent tools)
 
-The plugin registers **25 tools**, so the plan, the board, the backlog and the feedback loop can all be managed
+The plugin registers **28 tools**, so the plan, the board, the backlog and the feedback loop can all be managed
 conversationally:
 
 | Tool | What it does |
@@ -167,6 +194,9 @@ conversationally:
 | `daily_select_project` | choose what is being executed (`idea`/`parked` → `active`) |
 | `daily_plan_project` | break a project into linked daily tasks in one call |
 | `daily_live` | read the Live board: money, metric, hurdles, corrections, verdicts, staleness |
+| `daily_plugins` | read the plugin portfolio register: origin, licence, publication state, and the blockers before publication |
+| `daily_plugin` | record or update ONE plugin (origin is required: ours / fork / third-party) |
+| `daily_plugin_remove` | drop a register row — never touches the code or the repository |
 | `daily_checkin` | log a check-in (money, metric, progress, hurdles, corrections, verdict, **sparks**) |
 | `daily_checkin_item` | close or reopen one hurdle or correction |
 | `daily_sparks` | read the spark board: open ideas, their triage clock, and every dismissal with its reason |

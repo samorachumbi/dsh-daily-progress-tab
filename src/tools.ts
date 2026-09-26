@@ -16,7 +16,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Planner } from './planner.ts'
-import type { DayPlan, MutateOp, PlanItem, RankedProject, Snapshot, Spark } from './types.ts'
+import type { DayPlan, MutateOp, PlanItem, PortfolioEntry, RankedProject, Snapshot, Spark } from './types.ts'
 
 /** One task as the model sees it. */
 interface TaskView {
@@ -539,6 +539,152 @@ function renderSparks(value: SparkView): string {
   }
   return lines.join('\n')
 }
+
+/** One plugin as the model sees it. */
+interface PluginRowView {
+  id: string
+  name: string
+  title: string
+  origin: string
+  visibility: string
+  status: string
+  licence: string
+  upstream: string
+  sourcePath: string
+  publicUrl: string
+  /** Whether publishing this plugin is possible at all, before readiness. */
+  publishable: boolean
+  /** Empty means ready. */
+  blockers: string[]
+  /** Days since the stored facts were checked against the tree; -1 when never. */
+  verifiedDaysAgo: number
+  summary: string
+}
+
+interface PortfolioReport {
+  /** ours + forks: the plugins this operator authored. */
+  authored: number
+  ours: number
+  fork: number
+  thirdParty: number
+  internal: number
+  published: number
+  /** Publishable, not yet public, no blockers left. */
+  ready: number
+  installed: number
+  plugins: PluginRowView[]
+}
+
+function portfolioReport(snapshot: Snapshot): PortfolioReport {
+  const { counts, entries } = snapshot.portfolio
+  return {
+    authored: counts.authored,
+    ours: counts.ours,
+    fork: counts.fork,
+    thirdParty: counts.thirdParty,
+    internal: counts.internal,
+    published: counts.published,
+    ready: counts.ready,
+    installed: counts.installed,
+    plugins: entries.map((entry: PortfolioEntry) => ({
+      id: entry.id,
+      name: entry.name,
+      title: entry.title ?? '',
+      origin: entry.origin,
+      visibility: entry.visibility,
+      status: entry.status,
+      licence: entry.licence ?? '',
+      upstream: entry.upstream ?? '',
+      sourcePath: entry.sourcePath ?? '',
+      publicUrl: entry.publicUrl ?? '',
+      publishable: entry.publishable,
+      blockers: entry.blockers,
+      verifiedDaysAgo: entry.verifiedDaysAgo ?? -1,
+      summary: entry.summary ?? '',
+    })),
+  }
+}
+
+const pluginRowSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', required: true },
+    name: { type: 'string', required: true },
+    title: { type: 'string', required: true },
+    origin: { type: 'string', required: true },
+    visibility: { type: 'string', required: true },
+    status: { type: 'string', required: true },
+    licence: { type: 'string', required: true },
+    upstream: { type: 'string', required: true },
+    sourcePath: { type: 'string', required: true },
+    publicUrl: { type: 'string', required: true },
+    publishable: { type: 'boolean', required: true },
+    blockers: { type: 'array', required: true, items: { type: 'string' } },
+    /** -1 when the facts have never been verified. */
+    verifiedDaysAgo: { type: 'integer', required: true },
+    summary: { type: 'string', required: true },
+  },
+} as const
+
+const portfolioOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    authored: { type: 'integer', required: true },
+    ours: { type: 'integer', required: true },
+    fork: { type: 'integer', required: true },
+    thirdParty: { type: 'integer', required: true },
+    internal: { type: 'integer', required: true },
+    published: { type: 'integer', required: true },
+    ready: { type: 'integer', required: true },
+    installed: { type: 'integer', required: true },
+    plugins: { type: 'array', required: true, items: pluginRowSchema },
+  },
+} as const
+
+function renderPortfolioReport(value: PortfolioReport): string {
+  if (value.plugins.length === 0) {
+    return 'The plugin portfolio register is empty. Record a plugin with daily_plugin — its origin '
+      + '(ours | fork | third-party) is required, because that single field decides whether it can ever be published.'
+  }
+  const lines = ['Plugin portfolio — ' + value.authored + ' authored ('
+    + value.ours + ' ours, ' + value.fork + ' fork' + (value.fork === 1 ? '' : 's') + ')'
+    + ', ' + value.published + ' published, ' + value.ready + ' ready to publish'
+    + ' | ' + value.thirdParty + ' third-party (never publishable)'
+    + (value.internal > 0 ? ' | ' + value.internal + ' marked internal' : '')
+    + (value.installed > 0 ? ' | ' + value.installed + ' installed' : '')]
+  for (const plugin of value.plugins) {
+    lines.push('')
+    lines.push(plugin.name + (plugin.title === '' ? '' : '  (' + plugin.title + ')')
+      + '  [' + plugin.origin.toUpperCase() + ' | ' + plugin.visibility + ' | ' + plugin.status + ']')
+    if (plugin.summary !== '') lines.push('   ' + plugin.summary)
+    const meta: string[] = []
+    if (plugin.licence !== '') meta.push('licence ' + plugin.licence)
+    if (plugin.upstream !== '') meta.push('upstream ' + plugin.upstream)
+    if (plugin.sourcePath !== '') meta.push(plugin.sourcePath)
+    meta.push(plugin.verifiedDaysAgo < 0 ? 'facts never verified' : 'facts verified ' + plugin.verifiedDaysAgo + 'd ago')
+    lines.push('   ' + meta.join(' | '))
+    if (plugin.status === 'public') {
+      lines.push('   PUBLISHED' + (plugin.publicUrl === '' ? '' : ' — ' + plugin.publicUrl))
+    } else if (!plugin.publishable) {
+      // A fact, not a to-do list: there is nothing to fix here.
+      lines.push('   NOT PUBLISHABLE — ' + plugin.blockers.join('; '))
+    } else if (plugin.blockers.length === 0) {
+      lines.push('   READY TO PUBLISH — no blockers')
+    } else {
+      for (const blocker of plugin.blockers) lines.push('   blocked: ' + blocker)
+    }
+  }
+  return lines.join('\n')
+}
+
+const PORTFOLIO_OUT = {
+  schema: portfolioOutputSchema,
+  render: (_args: unknown, value: unknown) => [
+    { type: 'text' as const, text: renderPortfolioReport(value as PortfolioReport) },
+  ],
+} as const
 
 function projectsView(snapshot: Snapshot): { selectedProjectId: string; selectedProjectName: string; projects: ProjectRow[] } {
   const rows = snapshot.projects.map(projectRow)
@@ -1127,6 +1273,70 @@ export function buildTools(deps: ToolDeps) {
         const result = await planner.apply('checkinItem', date, '', args as Record<string, unknown>)
         if (!result.ok) throw new Error(result.code + ': ' + result.message)
         return liveView(result.snapshot)
+      },
+    }),
+
+    defineTool({
+      name: 'daily_plugins',
+      description: 'Read the plugin portfolio register: every plugin authored or installed, with its origin (ours | fork | third-party), visibility, licence, source path, publication state and the blockers standing between it and publication. Use it to answer "how many plugins have I built" and to check readiness BEFORE claiming anything is publishable.',
+      parameters: {},
+      output: PORTFOLIO_OUT,
+      execute: async () => portfolioReport(await planner.snapshot(today(), '')),
+    }),
+
+    defineTool({
+      name: 'daily_plugin',
+      description: 'Record or update ONE plugin in the portfolio register, keyed on its package name. `origin` is required the first time and is the field that decides everything: `ours` and `fork` can be published (a fork must also carry its upstream repo and commit), `third-party` never can. Visibility defaults to internal, because publishing is an explicit act and nothing should become publishable by omission. Record only facts you actually checked, and set `verifiedAt` to the day you checked them — the gate treats a stale verification as a blocker, not a pass.',
+      parameters: {
+        name: { type: 'string', required: true, description: 'Package name, e.g. dsh-cost-bubble. The register is keyed on it.' },
+        origin: { type: 'string', enum: ['ours', 'fork', 'third-party'], description: 'Who wrote it. Required when first recording; third-party is never publishable.' },
+        visibility: { type: 'string', enum: ['showcase', 'internal'], description: 'Whether it may EVER be published. Defaults to internal.' },
+        status: { type: 'string', enum: ['local', 'public'], description: 'local (not published) or public. Defaults to local.' },
+        title: { type: 'string', description: 'Display name.' },
+        summary: { type: 'string', description: 'One or two lines on what it does.' },
+        upstream: { type: 'string', description: 'For a fork: the upstream repo and commit, e.g. omdsh-dev/x@bedbd28.' },
+        licence: { type: 'string', description: 'e.g. MIT, BSD-3-Clause.' },
+        sourcePath: { type: 'string', description: 'Where the source lives on disk.' },
+        publicUrl: { type: 'string', description: 'The public repository URL, once published.' },
+        publishedAt: { type: 'string', description: 'The day it went public (YYYY-MM-DD).' },
+        installed: { type: 'boolean', description: 'Registered with the harness profile.' },
+        hasLicenseFile: { type: 'boolean', description: 'A LICENSE file exists in the source tree.' },
+        hasReadme: { type: 'boolean', description: 'A README exists.' },
+        hasScreenshot: { type: 'boolean', description: 'A screenshot exists in the repo.' },
+        sourceOutsideProfile: { type: 'boolean', description: 'False when the only copy is inside a profile node_modules — a single point of failure.' },
+        leakScanPassed: { type: 'boolean', description: 'The pre-publish leak scan passed for the CURRENT tree.' },
+        leakScanAt: { type: 'string', description: 'The day the leak scan last ran (YYYY-MM-DD).' },
+        gitReady: { type: 'boolean', description: 'A git repository exists with a clean working tree.' },
+        verifiedAt: { type: 'string', description: 'The day ALL the facts above were checked (YYYY-MM-DD). They expire.' },
+        notes: { type: 'string', description: 'Anything else worth keeping.' },
+      },
+      output: PORTFOLIO_OUT,
+      execute: async (args: Record<string, unknown>) => {
+        const name = typeof args.name === 'string' ? args.name.trim() : ''
+        if (name.length === 0) throw new Error('invalid_payload: name is required')
+        // Resolve by exact name to an id, so a name that is a substring of
+        // another plugin's cannot come back as an ambiguous match.
+        const before = await planner.snapshot(today(), '')
+        const existing = before.portfolio.entries.find((entry) => entry.name === name)
+        const payload = existing === undefined ? args : { ...args, pluginId: existing.id }
+        const result = await planner.apply(existing === undefined ? 'addPlugin' : 'updatePlugin', today(), '', payload)
+        if (!result.ok) throw new Error(result.code + ': ' + result.message)
+        return portfolioReport(result.snapshot)
+      },
+    }),
+
+    defineTool({
+      name: 'daily_plugin_remove',
+      description: 'Remove a plugin from the portfolio register. This is the RECORD only: it never touches the plugin, its source directory, its repository or the installed files. Use it to correct a mistaken entry.',
+      parameters: {
+        pluginId: { type: 'string', description: 'Exact plugin id from daily_plugins. Use this or `plugin`, not both.' },
+        plugin: { type: 'string', description: 'A unique case-insensitive substring of the package name.' },
+      },
+      output: PORTFOLIO_OUT,
+      execute: async (args: Record<string, unknown>) => {
+        const result = await planner.apply('removePlugin', today(), '', args as Record<string, unknown>)
+        if (!result.ok) throw new Error(result.code + ': ' + result.message)
+        return portfolioReport(result.snapshot)
       },
     }),
 
