@@ -91,7 +91,7 @@ export declare function verificationAgeDays(plugin: PluginRecord, today: string)
  *
  * The equivalence is asserted in BOTH directions by the tests. Offering the
  * commands under a blocked row would let the gate be pasted past, and for a
- * failed leak scan that means publishing the vault.
+ * failed leak scan that means publishing something that must never be public.
  *
  * The text is COPIED AND PASTED, so a metacharacter inside it is an instruction
  * to a shell. Every interpolated value is matched against a bare-word pattern

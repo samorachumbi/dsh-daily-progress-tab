@@ -165,9 +165,9 @@ export interface Snapshot {
 /** Which day a mutation addresses. */
 export type PlanTarget = 'today' | 'tomorrow'
 
-/** The seven rubric dimensions, reused verbatim from the vault's own
- * `business-idea-generator` skill so the planner scores ideas the same way the
- * research memos do. Each is rated 1-5. */
+/** The seven rubric dimensions, shared with the idea-research workflow this
+ * planner grew out of, so it scores ideas the same way those memos do. Each is
+ * rated 1-5. */
 export const RUBRIC_DIMENSIONS = [
   'forcingFunction',
   'competitionThinness',
@@ -230,7 +230,7 @@ export interface ProjectScore {
   timeDiscount: number
   /** 1 + 0.15 x (forcingFunction - 1), i.e. 1.00-1.60. A live forcing function compresses the window. */
   urgency: number
-  /** The lowest-rated dimension — per the vault rubric, this is the real risk, not an average. */
+  /** The lowest-rated dimension — by the rubric's own rule this is the real risk, not an average. */
   weakestDimension: RubricDimension
   /** True when ttfdDays, effortDays or revenuePerMonth is missing, so no score can be computed. */
   unestimated: boolean

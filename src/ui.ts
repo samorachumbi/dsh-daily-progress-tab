@@ -1364,7 +1364,7 @@ export const UI_HTML = `<!doctype html>
       sparkLine.className = board.triageDue ? "closed-line spark-due" : "closed-line";
     }
     el("closed-line").textContent = (staleCount ? staleCount + " live project(s) stale. " : "")
-      + (closed ? closed + " killed \u2014 kept in the vault register, not shown here." : "");
+      + (closed ? closed + " killed \u2014 kept in the register, not shown here." : "");
   }
 
   /**
