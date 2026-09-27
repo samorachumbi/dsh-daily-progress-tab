@@ -55,6 +55,15 @@ const THEME = flag('theme', 'dark')
 const FULL_PAGE = argv.includes('--full')
 const WAIT_SELECTOR = flag('wait', '')
 const GRADE_FILE = flag('grade', '')
+// --click SEL[,SEL...] dispatches REAL mouse events at each element's centre, in order.
+// A JS `.click()` is not a user activation, so anything gated on one — window.open in
+// particular — silently fails and the check reports a false negative on working code.
+const CLICKS = (flag('click', '') || '').split(',').map((s) => s.trim()).filter(Boolean)
+// --after FILE: a second evaluation point, run AFTER the clicks. The state a click
+// produces cannot be read from a grade that ran before it, and a driver that can only
+// report the "before" turns every popup question into a guess.
+const AFTER_FILE = flag('after', '')
+const AFTER_EXPR = AFTER_FILE ? readFileSync(AFTER_FILE, 'utf8') : ''
 const SCROLL_SELECTOR = flag('scroll', '')
 const SETTLE = Number(flag('settle', 800))
 const WIDTH = Number(flag('width', 1400))
@@ -195,6 +204,35 @@ if (GRADE_EXPR) {
   const value = await cdp.evaluate(GRADE_EXPR)
   log('\n== grade ==')
   log(typeof value === 'string' ? value : JSON.stringify(value, null, 2))
+}
+
+if (CLICKS.length > 0) {
+  for (const selector of CLICKS) {
+    const box = await cdp.evaluate('(() => {' +
+      'const el = document.querySelector(' + JSON.stringify(selector) + ');' +
+      'if (!el) return null;' +
+      'el.scrollIntoView({ block: "center" });' +
+      'const r = el.getBoundingClientRect();' +
+      'return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()')
+    if (!box) {
+      log('  click: nothing matched ' + selector)
+      continue
+    }
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: box.x, y: box.y, button: 'left', clickCount: 1 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box.x, y: box.y, button: 'left', clickCount: 1 })
+    log('  clicked ' + selector + ' at ' + box.x + ',' + box.y)
+    await sleep(700)
+  }
+  // A popup is a new PAGE TARGET, so it is visible to whoever is driving — proof the
+  // window opened, which the page itself cannot report (window.open returns a handle
+  // that a blocked popup makes null).
+  const targets = await (await fetch('http://127.0.0.1:' + CDP_PORT + '/json/list')).json()
+  log('  page targets after the clicks: ' + JSON.stringify(targets.filter((t) => t.type === 'page').map((t) => t.url)))
+  if (AFTER_EXPR) {
+    const value = await cdp.evaluate(AFTER_EXPR)
+    log('== after ==')
+    log(typeof value === 'string' ? value : JSON.stringify(value, null, 2))
+  }
 }
 
 if (SCROLL_SELECTOR) {

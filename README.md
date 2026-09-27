@@ -455,6 +455,12 @@ apart. `--wait` matters for the same reason a fragment link does not survive her
 a fetch *after* the load event, so "the HTML contains the string" proves nothing about what a reader
 sees.
 
+`--click` dispatches **real** mouse events at an element's centre, and `--after` evaluates a second
+expression once they have run. Both exist because a JS `.click()` is not a user activation: anything
+gated on one — `window.open` in particular — silently fails, and a working button reports as broken.
+A click test also needs to read the state the click *produced*, which a grade that ran before it
+cannot see.
+
 **Why the driver writes the file itself.** The PNG is written by the Node process from the base64 CDP
 returns, never by a browser-side `--screenshot` path — Chromium here is snap-confined, writes `/tmp`
 screenshots into its own private namespace and is denied `~/.cache`, and it reports success either way.
@@ -569,7 +575,9 @@ Available for work — **open an issue on this repository** (no address needed, 
 reach me through [my GitHub profile](https://github.com/samorachumbi).
 
 Other work of mine: [`dsh-cost-bubble`](https://github.com/samorachumbi/dsh-cost-bubble) — a live
-client-half plugin — and [the install guide](https://github.com/samorachumbi/dsh-plugin-install-guide).
+client-half plugin — [`dsh-app-launcher`](https://github.com/samorachumbi/dsh-app-launcher), the Apps
+pill that opens pages like this one, and
+[the install guide](https://github.com/samorachumbi/dsh-plugin-install-guide).
 
 ## Licence
 
