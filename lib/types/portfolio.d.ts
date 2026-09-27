@@ -16,8 +16,8 @@
  *     is only true because a scan ran on a recorded day, and that day is shown
  *     and expires. A gate that trusts a checkbox is not a gate.
  *   - `visibility` is deliberately separate from `origin`: a plugin of ours that
- *     reads the loan plan or the vault is `internal` for good, and it defaults
- *     to `internal` so that nothing is publishable by accident — only by an
+ *     reads private material is `internal` for good, and it defaults to
+ *     `internal` so that nothing is publishable by accident — only by an
  *     explicit act.
  *
  * WHY THE GATE IS A CHECKLIST AND NOT A LIST OF ERRORS. A gate that shows

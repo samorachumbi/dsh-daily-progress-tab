@@ -9,11 +9,12 @@ screen. There is no dock widget, no composer strip, and no harness UI footprint 
 Forked from [`omdsh-dev/dsh-daily-progress`](https://github.com/omdsh-dev/dsh-daily-progress)
 at `bedbd28de735ee1c49d684d922a3d8009bd21431` (see `UPSTREAM_COMMIT.txt`).
 
-> **Session context lives in the vault, not here.** The decision record, the ranking method, the
-> feedback-loop design and the bug census are in
-> `~/projects/deepseek-test/second-brain/` — project card `projects/dsh-daily-progress-tab.md`,
-> methods `concepts/project-prioritisation-method.md` and `concepts/project-feedback-loop.md`,
-> and `concepts/bug-census.md`. Read those before changing behaviour.
+> **The design record lives in this repository.** The ranking method is under [Ranking](#ranking),
+> the feedback-loop design under [The feedback loop (Live)](#the-feedback-loop-live), the state model
+> under [Storage](#storage), the publication gate under [What the gate shows](#what-the-gate-shows),
+> and every defect this fork fixed under [Differences from upstream](#differences-from-upstream).
+> Where a fixed defect has a test, that test is the durable half of the record: it fails if the defect
+> comes back.
 
 ## What you get
 
@@ -93,7 +94,7 @@ work it costs*.
 An unestimated project is **never guessed into the order** — with no revenue, effort or
 time-to-first-dollar it sorts after every scored project and is labelled **UNRANKED**. The
 seven-dimension rubric is a **gate, not a score**: the lowest dimension is reported as
-`weakest: <dimension>` rather than averaged away. Method: `concepts/project-prioritisation-method.md`.
+`weakest: <dimension>` rather than averaged away. The rubric, the score and the discounting live in `src/projects.ts`.
 
 ## The feedback loop (Live)
 
@@ -110,11 +111,13 @@ verdict of `continue · fix · pause · kill`, judged against the kill-switch ag
   money and verdicts on disk, invisible on the board — found by dumping the raw store, and now
   covered by a probe that reads the table directly rather than the snapshot.
 - A **`kill` verdict is an action**: it sets the status to `killed`, the project leaves the board,
-  and the vault register keeps the reason. Killed projects are counted under the column, never
+  and the register keeps the reason. Killed projects are counted under the column, never
   silently hidden.
 - Everything shown is derived on read from the check-ins, so the summary cannot drift from them.
 
-Design and reasoning: `concepts/project-feedback-loop.md`.
+Implementation: `src/projects.ts` derives the whole monitoring block on read, so the summary
+cannot drift from the check-ins. `tests/projects.test.ts` pins the staleness threshold, the period
+figures, the metric delta and the killed bucket.
 
 ## Sparks — the business ideas the feedback produces
 
@@ -139,7 +142,8 @@ under `IDEAS SPARKED BY THIS FEEDBACK` and counted at the foot of the Live colum
 - An idea left undecided for more than **14 days** trips a triage warning on the card and in the
   column, because a capture surface with no clock only ever grows.
 
-Design and reasoning: `concepts/sparks.md`.
+Implementation: the `spark*` operations in `src/planner.ts`; `tests/sparks.test.ts` pins the
+queue, the ageing clock and the decided history.
 
 ## The plugin portfolio register
 
@@ -396,19 +400,21 @@ typo in an element id renders **nothing** and fails silently. It asserts that th
 contains no backtick and no interpolation marker, that every id the script looks up is defined, and
 that every bubble heading has a style rule. Both of those checks have already caught real breakage.
 
-For the whole chain (snapshot → typecheck → tests → probes → build → deploy → restart → health →
-screenshot) use the vault's reusable runner:
+For the chain that matters before a deploy — typecheck → tests → build → snapshot → copy →
+verify — this repository ships its own runner, and it **never restarts the server**, because that
+would kill the session you are working in:
 
 ```bash
-bash ~/projects/deepseek-test/second-brain/scripts/build-loop.sh \
-  -d ~/projects/plugins/dsh-daily-progress-tab \
-  -k /tmp/dpt-boot/profiles/audit2/node_modules/dsh-daily-progress-tab \
-  -P 3099 -r /daily-progress-tab/ui --pidfile /tmp/dpt-boot.pid \
-  --dsh-home /tmp/dpt-boot --profile audit2
+scripts/deploy.sh              # build, verify, deploy into $PLANNER_HOME (default ~/dsh-planner)
+scripts/deploy.sh --check      # report drift and change nothing
+scripts/deploy.sh --rollback   # restore the previous snapshot
 ```
 
+Restart the instance yourself, then re-render to see what you changed.
+
 UI changes should be **rendered and looked at**, not reasoned about from the CSS — see
-`skills/jarvis-ui-build-SKILL.md` step 6 and `snippets/bubble-heading-css.md`.
+[Verifying the page without a DSH instance](#verifying-the-page-without-a-dsh-instance) above for the
+harness and the two-theme rule.
 
 ## Differences from upstream
 

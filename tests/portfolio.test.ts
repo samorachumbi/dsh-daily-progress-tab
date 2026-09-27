@@ -54,7 +54,7 @@ describe('the publish gate', () => {
   })
 
   it('refuses anything marked internal, even our own', () => {
-    // A plugin of ours that reads the loan plan or the vault is internal for good.
+    // A plugin of ours that reads private material is internal for good.
     assert.deepEqual(publishBlockers(plugin({ visibility: 'internal' }), TODAY), [
       'marked internal — never publishable',
     ])
@@ -291,8 +291,8 @@ describe('the commands offered to publish', () => {
   it('offers the commands when, and ONLY when, every gate item passes', () => {
     // Both directions, because each is a different failure. The dangerous one is
     // the first: commands under a BLOCKED row let the gate be pasted past, and
-    // this register's own fork is exactly that case - publishable, with a leak
-    // scan that fails on private-vault paths in README.md.
+    // this register's own fork was exactly that case - publishable, with a leak
+    // scan that failed on material in README.md that must not be public.
     const samples = [
       plugin(), plugin({ sourcePath: undefined }), plugin({ sourcePath: '   ' }),
       plugin({ sourcePath: '~/a b' }), plugin({ sourcePath: '~/x; rm -rf /' }),
