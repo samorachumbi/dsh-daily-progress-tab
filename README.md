@@ -16,6 +16,20 @@ at `bedbd28de735ee1c49d684d922a3d8009bd21431` (see `UPSTREAM_COMMIT.txt`).
 > Where a fixed defect has a test, that test is the durable half of the record: it fails if the defect
 > comes back.
 
+## What it looks like
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/planner-dark.png">
+  <img src="docs/planner-light.png" width="880" alt="The planner page: a Now banner naming the task in hand, Working / Pending / Live venture columns, the pick-a-task pool, today and tomorrow, a week heatmap, and the plugin portfolio register with its twelve-item gate">
+</picture>
+
+**The projects, tasks and plugins in that image are sample data.** The page is a real render of the
+real plugin, and the store behind it was seeded through the plugin's own `/mutate` API — so nothing
+on screen is drawn by hand — but the ventures are invented. The page this plugin serves for its
+author carries the author's actual register: revenue, kill-switches, live metrics. That is exactly
+the material the [portfolio gate](#what-the-gate-shows) exists to keep out of a public repository, so
+it is not what you are looking at.
+
 ## What you get
 
 - **Now** — the *one* task being worked on, as a filled banner at the top. Every task row on the page
