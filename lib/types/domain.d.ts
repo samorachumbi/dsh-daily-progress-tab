@@ -209,6 +209,9 @@ export declare const dailyProgressDomain: {
                 sourceOutsideProfile: z.ZodOptional<z.ZodBoolean>;
                 leakScanPassed: z.ZodOptional<z.ZodBoolean>;
                 leakScanAt: z.ZodOptional<z.ZodString>;
+                preflightPassed: z.ZodOptional<z.ZodBoolean>;
+                preflightAt: z.ZodOptional<z.ZodString>;
+                preflightNote: z.ZodOptional<z.ZodString>;
                 gitReady: z.ZodOptional<z.ZodBoolean>;
                 verifiedAt: z.ZodOptional<z.ZodString>;
                 notes: z.ZodOptional<z.ZodString>;

@@ -403,6 +403,17 @@ export interface PluginRecord {
   leakScanPassed?: boolean
   /** The day the leak scan last ran. */
   leakScanAt?: string
+  /**
+   * The pre-flight passed. A SEPARATE fact from the leak scan, and the
+   * difference is the whole point: the scan says the tree is safe to publish,
+   * the pre-flight says it still WORKS. A plugin that no longer builds damages
+   * the goal this register serves more than an unpublished one does.
+   */
+  preflightPassed?: boolean
+  /** The day the pre-flight last ran. */
+  preflightAt?: string
+  /** What the pre-flight actually ran, so "passed" can be read back and judged. */
+  preflightNote?: string
   gitReady?: boolean
   /** The day ALL of the above were last checked against the tree. */
   verifiedAt?: string
@@ -411,12 +422,41 @@ export interface PluginRecord {
   updatedAt: string
 }
 
+/**
+ * One item of the publish gate.
+ *
+ * The gate is a CHECKLIST, not a list of errors: every item is reported whether
+ * it passes or fails, because the question a publication decision rests on is
+ * "what exactly was checked?", and a list of only the failures cannot answer it.
+ * A gate that shows nothing when it is green is indistinguishable from one that
+ * never ran.
+ */
+export interface GateCheck {
+  /** Stable id. The page and the tests locate an item by this, never by its wording. */
+  key: string
+  /** Short subject, readable in BOTH states: "leak scan", "LICENSE", "screenshot". */
+  name: string
+  ok: boolean
+  /** Why it failed, as an instruction. Empty when it passed. */
+  detail: string
+  /** A permanent refusal rather than a to-do: a fact about what this is. */
+  fatal: boolean
+}
+
 /** A register row plus what the gate derived for it. Never stored. */
 export interface PortfolioEntry extends PluginRecord {
   publishable: boolean
   /** Empty means ready to publish. */
   blockers: string[]
   verifiedDaysAgo: number | null
+  /** Every gate item, passed and failed. Never stored: derived on every read. */
+  checks: GateCheck[]
+  /**
+   * The shell to paste to publish this plugin, or the EMPTY STRING when
+   * publishing it is refused or impossible. Empty is the affordance being
+   * ABSENT IN CODE rather than hidden at render time; see publishCommands.
+   */
+  commands: string
 }
 
 /** The derived answer to "how many plugins have I created?". Never stored. */

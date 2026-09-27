@@ -290,11 +290,30 @@ rather than shown as the one you are on.
 
 ## Install
 
+**Do NOT use `dsh plugin --profile web add`.** On this machine that command forwards to pnpm with
+`cwd` = the profile directory (`lib/bin.js:96`, `lib/plugin-9h8shc4d.js:108` in the DSH CLI), which
+materialises a second `@deepseek-ai/dsh-*` tree and kills every tool call — the failure this plugin's
+own warning below describes. This plugin declares its `@deepseek-ai/*` dependencies as
+**peerDependencies**, which is precisely the shape that triggers it.
+
+Copy real files and register them in the profile's patch layer instead:
+
 ```bash
-dsh plugin --profile web add /home/samora/projects/plugins/dsh-daily-progress-tab
+DEST="$HOME/.dsh/profiles/web/node_modules/dsh-daily-progress-tab"
+mkdir -p "$DEST"
+cp -r lib package.json "$DEST"/
 ```
 
-Then restart: `dsh web`. Open `/daily-progress-tab/ui`.
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml  (append)
+- insert:
+    - id: daily-progress-tab
+      name: 'dsh-daily-progress-tab'
+```
+
+Dependencies need no install: `@deepseek-ai/*` resolves through `~/.dsh/profiles/node_modules/`, the
+shared tree of symlinks into the single global copy. Then restart: `dsh web`, and open
+`/daily-progress-tab/ui`.
 
 ⚠️ **Never run a package manager inside `~/.dsh/profiles/*`** — it materialises a second
 `@deepseek-ai/dsh-*` tree, and two copies mean two `Symbol` instances and every tool call dying

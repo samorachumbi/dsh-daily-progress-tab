@@ -190,6 +190,8 @@ export function createPlanner(domainPromise: Promise<Domain<DailyProgressDomainS
     publicUrl: pickText(payload.publicUrl, prior?.publicUrl, MAX_PLUGIN_REF),
     publishedAt: pickText(payload.publishedAt, prior?.publishedAt, 32),
     leakScanAt: pickText(payload.leakScanAt, prior?.leakScanAt, 32),
+    preflightAt: pickText(payload.preflightAt, prior?.preflightAt, 32),
+    preflightNote: pickText(payload.preflightNote, prior?.preflightNote, MAX_SUMMARY),
     verifiedAt: pickText(payload.verifiedAt, prior?.verifiedAt, 32),
     notes: pickText(payload.notes, prior?.notes, MAX_SUMMARY),
     installed: pickBool(payload.installed, prior?.installed),
@@ -198,6 +200,7 @@ export function createPlanner(domainPromise: Promise<Domain<DailyProgressDomainS
     hasScreenshot: pickBool(payload.hasScreenshot, prior?.hasScreenshot),
     sourceOutsideProfile: pickBool(payload.sourceOutsideProfile, prior?.sourceOutsideProfile),
     leakScanPassed: pickBool(payload.leakScanPassed, prior?.leakScanPassed),
+    preflightPassed: pickBool(payload.preflightPassed, prior?.preflightPassed),
     gitReady: pickBool(payload.gitReady, prior?.gitReady),
   })
 

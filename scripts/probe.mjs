@@ -129,6 +129,10 @@ check('page declares the Live column',
 check('page declares the Pending column',
   { host: r.raw.includes('id="pending"'), head: r.raw.includes('>Pending <'), hint: r.raw.includes('deferred is not the same as unmeasured') },
   { host: true, head: true, hint: true })
+check('page renders the gate checklist and a copy affordance',
+  { checks: r.raw.includes('pfol-checks'), copy: r.raw.includes('pfol-copy'),
+    clipboard: r.raw.includes('navigator.clipboard') },
+  { checks: true, copy: true, clipboard: true })
 
 // ---------------------------------------------------------------- loopback guard
 check('non-loopback host refused', (await get('/daily-progress-tab/state?localDate=' + DATE, 'evil.example.com')).status, 403)
@@ -468,21 +472,79 @@ let folio = await runTool('daily_plugins', {})
 check('the register starts empty', [folio.authored, folio.plugins.length], [0, 0])
 folio = await runTool('daily_plugin', {
   name: 'dsh-demo', origin: 'ours', visibility: 'showcase', licence: 'MIT',
+  sourcePath: '~/projects/plugins/dsh-demo',
   hasLicenseFile: true, hasReadme: true, hasScreenshot: true, sourceOutsideProfile: true,
-  leakScanPassed: true, gitReady: true, verifiedAt: expectedToday,
+  leakScanPassed: true, preflightPassed: true, preflightAt: expectedToday,
+  preflightNote: 'tests + probes + build', gitReady: true, verifiedAt: expectedToday,
 })
 check('daily_plugin records one plugin', folio.authored, 1)
 check('a fully verified plugin is ready to publish', [folio.ready, folio.plugins[0].blockers], [1, []])
 check('the facts are dated, so they can expire', folio.plugins[0].verifiedDaysAgo, 0)
+check('the gate reports EVERY item, passed ones included',
+  folio.plugins[0].checks.map((item) => item.key),
+  ['origin', 'visibility', 'leak-scan', 'preflight', 'source', 'address',
+    'licence', 'upstream', 'readme', 'screenshot', 'git', 'recency'])
+check('and every one of them passes here', folio.plugins[0].checks.filter((item) => !item.ok).length, 0)
+check('a publishable plugin is handed the exact commands to publish it',
+  [folio.plugins[0].commands.includes('git push -u origin main'),
+    folio.plugins[0].commands.includes('samorachumbi/dsh-demo')], [true, true])
 folio = await runTool('daily_plugin', { name: 'dsh-demo', hasScreenshot: false })
 check('daily_plugin UPDATES the same record rather than adding a second', folio.plugins.length, 1)
 check('a missing screenshot blocks it', folio.plugins[0].blockers.length, 1)
 check('and it is no longer ready', folio.ready, 0)
+check('the failed item names itself and says what to do',
+  folio.plugins[0].checks.filter((item) => !item.ok).map((item) => [item.key, item.detail.length > 0]),
+  [['screenshot', true]])
+check('the blocker list is DERIVED from the checklist, so the two cannot disagree',
+  folio.plugins[0].blockers,
+  folio.plugins[0].checks.filter((item) => !item.ok).map((item) => item.detail))
+check('and one outstanding item is enough to withhold the commands entirely',
+  folio.plugins[0].commands, '')
+// Our OWN plugin with everything else in place, marked internal: the single flag
+// has to remove the commands by itself, or the gate is not what does the refusing.
+folio = await runTool('daily_plugin', { name: 'dsh-demo', hasScreenshot: true, visibility: 'internal' })
+check('our own plugin marked INTERNAL is offered NO commands at all',
+  folio.plugins.find((p) => p.name === 'dsh-demo').commands, '')
+check('and its refusal is marked permanent rather than as work to do',
+  folio.plugins.find((p) => p.name === 'dsh-demo').checks
+    .filter((item) => !item.ok).map((item) => [item.key, item.fatal]),
+  [['visibility', true]])
+folio = await runTool('daily_plugin', { name: 'dsh-demo', visibility: 'showcase' })
+check('showcase restores them, so the flag is the only thing that refused',
+  folio.plugins.find((p) => p.name === 'dsh-demo').commands.includes('git push -u origin main'), true)
+check('and they are safe to paste: no substitution, no interpolation',
+  /[$`]/.test(folio.plugins.find((p) => p.name === 'dsh-demo').commands), false)
+// A path the shell would act on. The commands must vanish - and the gate must SAY
+// so, or the panel would read READY TO PUBLISH while handing over nothing.
+folio = await runTool('daily_plugin', { name: 'dsh-demo', sourcePath: '~/x; rm -rf /' })
+check('a source path that is not a bare word yields NO commands rather than a dangerous one',
+  folio.plugins.find((p) => p.name === 'dsh-demo').commands, '')
+check('and the gate names that as the reason, instead of reading ready',
+  folio.plugins.find((p) => p.name === 'dsh-demo').checks
+    .filter((item) => !item.ok).map((item) => item.key),
+  ['address'])
+folio = await runTool('daily_plugin', { name: 'dsh-demo', sourcePath: '~/projects/plugins/dsh-demo' })
+check('and a pasteable path puts them back', 
+  folio.plugins.find((p) => p.name === 'dsh-demo').commands.includes('cd ~/projects/plugins/dsh-demo'), true)
 folio = await runTool('daily_plugin', { name: 'dsh-somebody-elses', origin: 'third-party' })
 check('third-party work is not publishable at all', folio.plugins.find((p) => p.name === 'dsh-somebody-elses').publishable, false)
 check('and is never counted as authored', folio.authored, 1)
 check('a new plugin is internal unless told otherwise',
   folio.plugins.find((p) => p.name === 'dsh-somebody-elses').visibility, 'internal')
+// Make it showcase, with every fact true, so ORIGIN is the only thing refusing
+// it. Left internal it would be refused twice over and would prove nothing about
+// the rule that matters: someone else's work is never offered for publication.
+folio = await runTool('daily_plugin', {
+  name: 'dsh-somebody-elses', visibility: 'showcase', licence: 'MIT',
+  sourcePath: '~/projects/plugins/dsh-theirs',
+  hasLicenseFile: true, hasReadme: true, hasScreenshot: true, sourceOutsideProfile: true,
+  leakScanPassed: true, preflightPassed: true, preflightAt: expectedToday,
+  gitReady: true, verifiedAt: expectedToday,
+})
+const theirs = folio.plugins.find((p) => p.name === 'dsh-somebody-elses')
+check('someone else\'s otherwise PERFECT plugin still gets no commands', theirs.commands, '')
+check('and the gate shows the refusal alone, not a to-do list to work through',
+  theirs.checks.map((item) => item.key), ['origin', 'visibility'])
 folio = await runTool('daily_plugin_remove', { plugin: 'dsh-somebody-elses' })
 check('removing takes it out of the register', folio.plugins.length, 1)
 check('an unknown plugin is refused',
@@ -876,6 +938,8 @@ r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'addPlugin', payload: {
   name: 'dsh-cost-bubble', origin: 'ours', visibility: 'showcase', title: 'Cost bubble',
   licence: 'MIT', sourcePath: '~/projects/plugins/dsh-cost-bubble', installed: true,
   hasLicenseFile: true, hasReadme: true, sourceOutsideProfile: true, leakScanPassed: true,
+  preflightPassed: true, preflightAt: PROJ_DATE,
+  preflightNote: 'publish-scan clean; git tree clean at 33058be; 6 tracked files',
   gitReady: true, verifiedAt: PROJ_DATE,
 } })
 let folio2 = r.parsed.snapshot.portfolio
@@ -914,19 +978,26 @@ check('the third-party count is separate', folio2.counts.thirdParty, 1)
 // A fork: publishable, but only with attribution recorded.
 r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'addPlugin', payload: {
   name: 'dsh-daily-progress-tab', origin: 'fork', visibility: 'showcase', licence: 'BSD-3-Clause',
+  sourcePath: '~/projects/plugins/dsh-daily-progress-tab',
   hasLicenseFile: true, hasReadme: true, hasScreenshot: true, sourceOutsideProfile: true,
-  leakScanPassed: true, gitReady: true, verifiedAt: PROJ_DATE,
+  leakScanPassed: true, preflightPassed: true, preflightAt: PROJ_DATE,
+  gitReady: true, verifiedAt: PROJ_DATE,
 } })
 folio2 = r.parsed.snapshot.portfolio
 check('a fork without an upstream is blocked', 
   folio2.entries.find((e) => e.name === 'dsh-daily-progress-tab').blockers.length, 1)
 check('and the blocker names the attribution',
   /upstream/.test(folio2.entries.find((e) => e.name === 'dsh-daily-progress-tab').blockers[0]), true)
+check('and a blocked plugin is offered NO commands, so the gate cannot be pasted past',
+  folio2.entries.find((e) => e.name === 'dsh-daily-progress-tab').commands, '')
 r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'updatePlugin', payload: {
   plugin: 'daily-progress-tab', upstream: 'omdsh-dev/dsh-daily-progress@bedbd28',
 } })
 check('recording the upstream clears it',
   r.parsed.snapshot.portfolio.entries.find((e) => e.name === 'dsh-daily-progress-tab').blockers, [])
+check('and only a GREEN gate is handed the commands',
+  r.parsed.snapshot.portfolio.entries.find((e) => e.name === 'dsh-daily-progress-tab')
+    .commands.includes('git push -u origin main'), true)
 check('three authored now counts the fork', r.parsed.snapshot.portfolio.counts.authored, 3)
 
 // Facts expire: a verification older than VERIFY_STALE_DAYS is a blocker, so a
@@ -964,6 +1035,14 @@ const facility2 = new DomainFacility({
 const domain2 = await facility2.open(dailyProgressDomain)
 const reopened = domain2.table('plans').get('default:' + RACE_DATE)
 check('durability across reopen', reopened && reopened.items.length, N)
+// The three pre-flight fields did NOT survive this, and nothing else noticed:
+// they were declared on the record type but not in the domain schema, so zod
+// stripped them on read while the write's own response looked perfect.
+const reopenedPlugin = [...domain2.table('plugins').entries()]
+  .map(([, value]) => value).find((value) => value.name === 'dsh-cost-bubble')
+check('the plugin register reopens with the pre-flight facts INTACT',
+  [reopenedPlugin.preflightPassed, typeof reopenedPlugin.preflightAt, reopenedPlugin.preflightNote.length > 0],
+  [true, 'string', true])
 await domain2.close()
 
 rmSync(root, { recursive: true, force: true })

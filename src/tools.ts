@@ -559,6 +559,19 @@ interface PluginRowView {
   /** Days since the stored facts were checked against the tree; -1 when never. */
   verifiedDaysAgo: number
   summary: string
+  /** Every gate item, passed and failed — the checklist as the model reads it. */
+  checks: GateCheckView[]
+  /** The shell to paste to publish it. EMPTY when publishing is refused or impossible. */
+  commands: string
+}
+
+/** One gate item as the model sees it. */
+interface GateCheckView {
+  key: string
+  name: string
+  ok: boolean
+  detail: string
+  fatal: boolean
 }
 
 interface PortfolioReport {
@@ -601,6 +614,14 @@ function portfolioReport(snapshot: Snapshot): PortfolioReport {
       blockers: entry.blockers,
       verifiedDaysAgo: entry.verifiedDaysAgo ?? -1,
       summary: entry.summary ?? '',
+      checks: entry.checks.map((item) => ({
+        key: item.key,
+        name: item.name,
+        ok: item.ok,
+        detail: item.detail,
+        fatal: item.fatal,
+      })),
+      commands: entry.commands,
     })),
   }
 }
@@ -624,6 +645,25 @@ const pluginRowSchema = {
     /** -1 when the facts have never been verified. */
     verifiedDaysAgo: { type: 'integer', required: true },
     summary: { type: 'string', required: true },
+    /* Inlined rather than a named const: a const referenced here would have to
+       be declared above this literal, and that ordering is easy to get wrong. */
+    checks: {
+      type: 'array',
+      required: true,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          key: { type: 'string', required: true },
+          name: { type: 'string', required: true },
+          ok: { type: 'boolean', required: true },
+          detail: { type: 'string', required: true },
+          fatal: { type: 'boolean', required: true },
+        },
+      },
+    },
+    /** EMPTY when publishing is refused or impossible. */
+    commands: { type: 'string', required: true },
   },
 } as const
 
@@ -668,12 +708,22 @@ function renderPortfolioReport(value: PortfolioReport): string {
     if (plugin.status === 'public') {
       lines.push('   PUBLISHED' + (plugin.publicUrl === '' ? '' : ' — ' + plugin.publicUrl))
     } else if (!plugin.publishable) {
-      // A fact, not a to-do list: there is nothing to fix here.
+      // A fact, not a to-do list: there is nothing to fix, and listing the
+      // missing facts would read as work on something that must not happen.
       lines.push('   NOT PUBLISHABLE — ' + plugin.blockers.join('; '))
-    } else if (plugin.blockers.length === 0) {
-      lines.push('   READY TO PUBLISH — no blockers')
+      for (const item of plugin.checks) lines.push('   ' + item.name + ': ' + (item.ok ? 'pass' : 'refused'))
     } else {
-      for (const blocker of plugin.blockers) lines.push('   blocked: ' + blocker)
+      // EVERY item, passed or not: "it said ready" is not a record of what was
+      // checked, so the passed items are named as well as the failed ones.
+      for (const item of plugin.checks) {
+        lines.push('   ' + item.name + ': ' + (item.ok ? 'pass' : 'TODO — ' + item.detail))
+      }
+      if (plugin.blockers.length === 0) lines.push('   READY TO PUBLISH — every item above passes')
+      if (plugin.commands !== '') {
+        lines.push('')
+        lines.push('   Paste this to publish it (step 1 is in the GitHub UI):')
+        for (const line of plugin.commands.split('\n')) lines.push('     ' + line)
+      }
     }
   }
   return lines.join('\n')
@@ -1278,7 +1328,7 @@ export function buildTools(deps: ToolDeps) {
 
     defineTool({
       name: 'daily_plugins',
-      description: 'Read the plugin portfolio register: every plugin authored or installed, with its origin (ours | fork | third-party), visibility, licence, source path, publication state and the blockers standing between it and publication. Use it to answer "how many plugins have I built" and to check readiness BEFORE claiming anything is publishable.',
+      description: 'Read the plugin portfolio register: every plugin authored or installed, with its origin (ours | fork | third-party), visibility, licence, source path, publication state and the full gate CHECKLIST — every item, passed or failed — plus, for work that may be published at all, the exact shell to publish it. Use it to answer "how many plugins have I built" and to check readiness BEFORE claiming anything is publishable.',
       parameters: {},
       output: PORTFOLIO_OUT,
       execute: async () => portfolioReport(await planner.snapshot(today(), '')),
@@ -1307,6 +1357,9 @@ export function buildTools(deps: ToolDeps) {
         leakScanPassed: { type: 'boolean', description: 'The pre-publish leak scan passed for the CURRENT tree.' },
         leakScanAt: { type: 'string', description: 'The day the leak scan last ran (YYYY-MM-DD).' },
         gitReady: { type: 'boolean', description: 'A git repository exists with a clean working tree.' },
+        preflightPassed: { type: 'boolean', description: 'The pre-flight passed for the CURRENT tree. A different fact from the leak scan: that one says the tree is safe to publish, this one says it still works.' },
+        preflightAt: { type: 'string', description: 'The day the pre-flight last ran (YYYY-MM-DD).' },
+        preflightNote: { type: 'string', description: 'What the pre-flight actually ran, e.g. "82 tests, 269 probes, build clean". The gate shows this, so "passed" can be read back and judged.' },
         verifiedAt: { type: 'string', description: 'The day ALL the facts above were checked (YYYY-MM-DD). They expire.' },
         notes: { type: 'string', description: 'Anything else worth keeping.' },
       },

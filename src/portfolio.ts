@@ -20,13 +20,19 @@
  *     to `internal` so that nothing is publishable by accident — only by an
  *     explicit act.
  *
+ * WHY THE GATE IS A CHECKLIST AND NOT A LIST OF ERRORS. A gate that shows
+ * nothing when it is green is indistinguishable from one that never ran, and
+ * "it said ready" is not a record of what was checked. So `gateChecks` reports
+ * EVERY item, passed or failed, with the passed ones named — and `publishBlockers`
+ * is DERIVED from it, so the short list and the long one cannot disagree.
+ *
  * The register answers the question actually asked — "how many plugins have I
  * created?" — as a DERIVED count over records, so it can never be a number
  * somebody typed.
  * @module dsh-daily-progress-tab/portfolio
  */
 
-import type { PluginRecord, Portfolio, PortfolioCounts, PortfolioEntry } from './types.ts'
+import type { GateCheck, PluginRecord, Portfolio, PortfolioCounts, PortfolioEntry } from './types.ts'
 
 /** Who wrote it. `fork` is ours-with-an-upstream: publishable, with attribution. */
 export const PLUGIN_ORIGINS = ['ours', 'fork', 'third-party'] as const
@@ -50,7 +56,28 @@ export const MAX_PLUGIN_REF = 300
  */
 export const VERIFY_STALE_DAYS = 30
 
+/**
+ * The GitHub account every plugin repository is published under. A constant
+ * rather than a field on each record, because this value is composed into a
+ * command the operator pastes into a shell: a URL assembled in three places is
+ * a URL that eventually disagrees with itself.
+ */
+export const PUBLISH_OWNER = 'samorachumbi'
+
+/** Where the leak scanner lives. Absolute, because the command runs from inside a repository. */
+export const PUBLISH_SCAN = '~/projects/plugins/publish-scan.sh'
+
 const DAY_MS = 86400000
+
+/**
+ * A string safe to paste into a shell as a bare word: no quotes, no spaces, no
+ * substitution, no backtick, no newline. Anything else yields NO commands
+ * rather than a command that does something else — see `publishCommands`.
+ */
+const SAFE_WORD = /^[A-Za-z0-9_@%+=:,./~-]+$/
+
+/** A package name doubles as a repository name, and can be matched more tightly. */
+const SAFE_REPO_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / DAY_MS)
@@ -61,44 +88,164 @@ export function isPublishable(plugin: PluginRecord): boolean {
   return (plugin.origin === 'ours' || plugin.origin === 'fork') && plugin.visibility === 'showcase'
 }
 
+/** One dated fact as a gate item: the detail is dropped when the fact holds. */
+function fact(key: string, name: string, ok: boolean, detail: string): GateCheck {
+  return { key, name, ok, detail: ok ? '' : detail, fatal: false }
+}
+
+/** The source path, but only when it is safe to paste as a bare shell word. */
+function pastablePath(plugin: PluginRecord): string {
+  const path = (plugin.sourcePath ?? '').trim()
+  return SAFE_WORD.test(path) ? path : ''
+}
+
+/**
+ * Whether a publish command can be handed over at all: a pasteable source path
+ * and a package name that is also a repository name.
+ *
+ * This is a GATE ITEM and not an implementation detail of `publishCommands`.
+ * Without it a record whose path cannot be pasted would render READY TO PUBLISH
+ * with no commands and no explanation — the panel contradicting itself in the
+ * one place it has to be trustworthy. The two are kept in step by deriving both
+ * from this function and `SAFE_REPO_NAME`, never by remembering to.
+ */
+function addressOk(plugin: PluginRecord): boolean {
+  return pastablePath(plugin) !== '' && SAFE_REPO_NAME.test(plugin.name.trim())
+}
+
+/**
+ * Every item of the publish gate, in the order they should be read: the two
+ * refusals first, then the missing facts, then recency.
+ *
+ * The order is not cosmetic. The page renders these top-down as "what next", so
+ * a fact that can never be satisfied must not be sitting above one that is a
+ * single command away.
+ */
+export function gateChecks(plugin: PluginRecord, today = ''): GateCheck[] {
+  const thirdParty = plugin.origin === 'third-party'
+  const internal = plugin.visibility === 'internal'
+  const checks: GateCheck[] = [
+    {
+      key: 'origin',
+      name: 'origin — ' + plugin.origin,
+      ok: !thirdParty,
+      detail: thirdParty ? 'not ours — a third-party plugin is never publishable' : '',
+      fatal: thirdParty,
+    },
+    {
+      key: 'visibility',
+      name: 'visibility — ' + plugin.visibility,
+      ok: !internal,
+      detail: internal ? 'marked internal — never publishable' : '',
+      fatal: internal,
+    },
+  ]
+  // Not publishable at all: report the refusal and stop. A to-do list for
+  // something that must not happen is an invitation to start it.
+  if (thirdParty || internal) return checks
+
+  checks.push(fact('leak-scan', 'leak scan', plugin.leakScanPassed === true,
+    'the leak scan has not passed for the current tree'))
+  // Deliberately NOT the same fact as the leak scan above: that one says the
+  // tree is safe to publish, this one says it still WORKS.
+  checks.push(fact('preflight', 'pre-flight', plugin.preflightPassed === true,
+    'the pre-flight has not passed for this tree — run it and record the result'))
+  checks.push(fact('source', 'source location', plugin.sourceOutsideProfile === true,
+    // The cost-bubble lesson: it lived only inside a profile node_modules that
+    // this machine documents as crash-prone, so the portfolio's centrepiece had
+    // a single point of failure.
+    'source lives only inside a profile — recover it into a source directory first'))
+  // Where the source IS, versus whether it can be handed over: a path with a
+  // space in it is a real source location and still not a pasteable command.
+  checks.push(fact('address', 'address — source path and package name', addressOk(plugin),
+    'the source path or the package name cannot be pasted into a shell — no command can be handed over until one can'))
+  checks.push(fact('licence', 'LICENSE', plugin.hasLicenseFile === true, 'no LICENSE file'))
+  checks.push(fact('upstream',
+    plugin.origin === 'fork' ? 'upstream attribution' : 'upstream attribution — not a fork',
+    plugin.origin !== 'fork' || (plugin.upstream !== undefined && plugin.upstream.length > 0),
+    'a fork must record its upstream repository and commit'))
+  checks.push(fact('readme', 'README', plugin.hasReadme === true, 'no README'))
+  checks.push(fact('screenshot', 'screenshot', plugin.hasScreenshot === true, 'no screenshot'))
+  checks.push(fact('git', 'git repository', plugin.gitReady === true, 'no git repository with a clean tree'))
+
+  const age = verificationAgeDays(plugin, today)
+  checks.push(fact('recency',
+    age === null ? 'facts current — never verified' : 'facts current — ' + age + 'd old',
+    age === null || age <= VERIFY_STALE_DAYS,
+    'these facts were verified ' + age + ' days ago — re-verify before trusting them'))
+  return checks
+}
+
 /**
  * Every reason this plugin is not ready to publish, in the order they should be
  * fixed. Empty means ready. A plugin that is already public has nothing to
  * block, so it returns empty rather than re-litigating a finished decision.
+ *
+ * Derived from `gateChecks`, never computed alongside it.
  */
 export function publishBlockers(plugin: PluginRecord, today = ''): string[] {
-  const blockers: string[] = []
-  if (plugin.origin === 'third-party') blockers.push('not ours — a third-party plugin is never publishable')
-  if (plugin.visibility === 'internal') blockers.push('marked internal — never publishable')
-  // Not publishable at all: report only why, never a to-do list for something
-  // that must not happen.
-  if (!isPublishable(plugin)) return blockers
-  if (plugin.status === 'public') return blockers
-  if (plugin.leakScanPassed !== true) blockers.push('the leak scan has not passed for the current tree')
-  if (!plugin.sourceOutsideProfile) {
-    // The cost-bubble lesson: it lived only inside a profile node_modules that
-    // this machine documents as crash-prone, so the portfolio's centrepiece had
-    // a single point of failure.
-    blockers.push('source lives only inside a profile — recover it into a source directory first')
-  }
-  if (!plugin.hasLicenseFile) blockers.push('no LICENSE file')
-  if (plugin.origin === 'fork' && (plugin.upstream === undefined || plugin.upstream.length === 0)) {
-    blockers.push('a fork must record its upstream repository and commit')
-  }
-  if (!plugin.hasReadme) blockers.push('no README')
-  if (!plugin.hasScreenshot) blockers.push('no screenshot')
-  if (!plugin.gitReady) blockers.push('no git repository with a clean tree')
-  const age = verificationAgeDays(plugin, today)
-  if (age !== null && age > VERIFY_STALE_DAYS) {
-    blockers.push('these facts were verified ' + age + ' days ago — re-verify before trusting them')
-  }
-  return blockers
+  const failed = gateChecks(plugin, today).filter((check) => !check.ok)
+  // A refusal is the whole answer: there is no work to do on it, and the other
+  // items would read as a to-do list for something that must not happen.
+  const fatal = failed.filter((check) => check.fatal)
+  if (fatal.length > 0) return fatal.map((check) => check.detail)
+  if (plugin.status === 'public') return []
+  return failed.map((check) => check.detail)
 }
 
 /** Whole days since the recorded facts were verified, or null when never/no date. */
 export function verificationAgeDays(plugin: PluginRecord, today: string): number | null {
   if (today === '' || plugin.verifiedAt === undefined || plugin.verifiedAt === '') return null
   return Math.max(0, daysBetween(plugin.verifiedAt.slice(0, 10), today))
+}
+
+/**
+ * The exact shell the operator pastes to publish this plugin: the toil removed,
+ * the irreversible step still theirs.
+ *
+ * The EMPTY STRING means no affordance at all, and that is a guarantee in code
+ * rather than a button hidden at render time. A third-party plugin, anything
+ * marked internal, anything already public, anything whose path cannot be pasted
+ * safely, and anything with a single gate item still outstanding all return '' —
+ * so neither the page nor the model has anything to offer.
+ *
+ * The equivalence is asserted in BOTH directions by the tests. Offering the
+ * commands under a blocked row would let the gate be pasted past, and for a
+ * failed leak scan that means publishing the vault.
+ *
+ * The text is COPIED AND PASTED, so a metacharacter inside it is an instruction
+ * to a shell. Every interpolated value is matched against a bare-word pattern
+ * first, and a value that fails yields NO commands rather than a different one.
+ */
+export function publishCommands(plugin: PluginRecord, today = '', owner = PUBLISH_OWNER): string {
+  if (!isPublishable(plugin) || plugin.status === 'public') return ''
+  // GREEN GATE FIRST, and the order is the safety property. A blocked plugin is
+  // refused for the reason that matters, before any formatting detail about the
+  // address is even considered.
+  if (publishBlockers(plugin, today).length > 0) return ''
+  // The same predicate the gate reports on, so a blank panel and a silently
+  // empty string cannot part company.
+  if (!addressOk(plugin) || !SAFE_REPO_NAME.test(owner)) return ''
+  const path = pastablePath(plugin)
+  const name = plugin.name.trim()
+  return [
+    '# Publish ' + name + ' as ' + owner + '/' + name,
+    '# 1. Create the repository on GitHub FIRST and leave it EMPTY:',
+    '#    name ' + name + ', no README, no licence, no .gitignore.',
+    'cd ' + path,
+    'bash ' + PUBLISH_SCAN + ' .        # must print SCAN CLEAN',
+    'git status --porcelain     # must print NOTHING',
+    'git log --oneline -1       # must be the commit you mean to publish',
+    'git remote -v              # must NOT already list origin',
+    'git remote add origin https://github.com/' + owner + '/' + name + '.git',
+    'git push -u origin main',
+    '',
+    '# 2. Run this repository own build and tests BEFORE step 3, and record the',
+    '#    result in the register as preflightNote — the gate shows that note, so',
+    '#    "the pre-flight passed" can always be read back and judged.',
+    '# 3. Then set the description and topics in the GitHub UI, and read the',
+    '#    rendered README once before anyone else does.',
+  ].join('\n')
 }
 
 export function portfolioCounts(plugins: readonly PluginRecord[]): PortfolioCounts {
@@ -144,6 +291,10 @@ export function portfolioView(plugins: readonly PluginRecord[], today = ''): Por
     publishable: isPublishable(plugin),
     blockers: publishBlockers(plugin, today),
     verifiedDaysAgo: verificationAgeDays(plugin, today),
+    // Derived here, once, so the page and the model cannot be shown different
+    // checklists for the same record.
+    checks: gateChecks(plugin, today),
+    commands: publishCommands(plugin, today),
   }))
   entries.sort((a, b) => {
     if ((a.status === 'public') !== (b.status === 'public')) return a.status === 'public' ? 1 : -1
