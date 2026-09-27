@@ -42,7 +42,7 @@ const EVERY_FIELD: Record<string, unknown> = {
   upstream: 'omdsh-dev/x@bedbd28',
   licence: 'MIT',
   sourcePath: '~/projects/plugins/dsh-cost-bubble',
-  publicUrl: 'https://github.com/samorachumbi/dsh-cost-bubble',
+  publicUrl: 'https://github.com/octo-dev/dsh-cost-bubble',
   publishedAt: '2026-09-27',
   installed: true,
   hasLicenseFile: true,

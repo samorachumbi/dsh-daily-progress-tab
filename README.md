@@ -6,6 +6,9 @@ tab**, driven by the harness agent as much as by hand.
 Open **`http://127.0.0.1:3080/daily-progress-tab/ui`** in a tab and drag it to a second
 screen. There is no dock widget, no composer strip, and no harness UI footprint at all.
 
+**Available for work:** I build and audit DSH plugins, including the client half most authors can't
+get working — [how to reach me](#work-with-me).
+
 Forked from [`omdsh-dev/dsh-daily-progress`](https://github.com/omdsh-dev/dsh-daily-progress)
 at `bedbd28de735ee1c49d684d922a3d8009bd21431` (see `UPSTREAM_COMMIT.txt`).
 
@@ -551,6 +554,22 @@ chips, bubble headings, the `timezone` / `publishOwner` / `leakScan` config fiel
 and the optional-`tools` registration.
 
 Known gap: no `src/invariant.ts` / `./invariant` export (the harness package convention).
+
+## Work with me
+
+I build and audit **DeepSeek Harness plugins**. In practice that means:
+
+| | |
+|---|---|
+| **Plugin build** | a dual-face plugin — host routes plus a real client UI — installed safely, with a rollback, and the awkward parts written down instead of hand-waved |
+| **Plugin audit** | a written report: verdict first, `file:line` findings against a pinned commit, and an honest section on what it does well |
+| **Profile rescue** | a harness throwing `Cannot read properties of undefined (reading 'prepare')` after a plugin install — I have recovered this twice and published the procedure |
+
+Available for work — **open an issue on this repository** (no address needed, nothing exposed), or
+reach me through [my GitHub profile](https://github.com/samorachumbi).
+
+Other work of mine: [`dsh-cost-bubble`](https://github.com/samorachumbi/dsh-cost-bubble) — a live
+client-half plugin — and [the install guide](https://github.com/samorachumbi/dsh-plugin-install-guide).
 
 ## Licence
 
