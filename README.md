@@ -213,6 +213,33 @@ passing a name straight to `addItem` (which links by id) would silently create u
 Tools are registered inside `ctx.inject(['tools'], …)`, not in the plugin's required `inject`:
 a profile composed without a tool registry still boots the planner, it just gets no tools.
 
+### What the gate shows
+
+Every item is drawn, passed or not &mdash; twelve of them for a publishable plugin &mdash; because a
+gate that shows nothing when it is green cannot be told apart from one that never ran, and *"it said
+ready"* is not a record of what was checked.
+
+| state | meaning |
+|---|---|
+| `pass` | the fact holds, as of `verifiedAt` |
+| `todo` | an outstanding fact, with what to do about it |
+| `never` | a permanent refusal &mdash; not work, so it is drawn muted rather than amber |
+
+**The commands to publish appear when, and only when, every item passes**, and never for third-party
+or internal work. That is a guarantee in the code rather than a button hidden at render time: the
+command builder returns the empty string, so neither the page nor the model has anything to offer.
+Third-party work gets no checklist to work through either &mdash; a to-do list for something that must
+not happen reads as an invitation to start it.
+
+**The plugin executes nothing.** There is no `child_process`: the agent runs the pre-flight (build,
+tests, leak scan) and records the outcome with its date, and the gate displays that note, so "the
+pre-flight passed" can always be read back and judged. The irreversible step &mdash; the push &mdash;
+stays with a human; the toil does not.
+
+**Gate items:** `origin`, `visibility`, leak scan, pre-flight, source location, publish address,
+LICENSE, upstream attribution, README, screenshot, git repository, and recency. A fork must record its
+upstream repository and commit, and an unverified fact counts as missing rather than true.
+
 ### Timezone
 
 Browser requests carry the user's own zone and local date. Agent calls carry neither, so they
