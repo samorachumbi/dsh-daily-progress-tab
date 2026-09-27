@@ -37,6 +37,13 @@ function check(label, actual, expected) {
 const TZ = 'Africa/Nairobi'
 const DATE = '2026-08-13'
 
+// The publish values are CONFIG now, so the harness supplies a fixture. It is
+// deliberately not an account anybody owns: a value that could equally have come
+// from a built-in default would prove nothing, and the point of these probes is
+// that the configured value is what reaches the register.
+const PROBE_OWNER = 'probe-owner-7'
+const PROBE_SCAN = '~/bin/probe-scan.sh'
+
 // ---------------------------------------------------------------- static contract
 // The plugin's inject names must exist in the harness packages we depend on.
 const wsTypes = readFileSync('node_modules/@deepseek-ai/dsh-host-webserver/lib/types/index.d.ts', 'utf8')
@@ -47,6 +54,17 @@ check('harness declares storageDomain on Context', /storageDomain:\s*DomainFacil
 check('no client bundle is shipped', existsSync(new URL('../lib/client.js', import.meta.url)), false)
 check('package.json declares no client half',
   Object.hasOwn(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).dsh, 'client'), false)
+
+// The config SCHEMA, exercised in process. A field the schema rejects fails at
+// BOOT, where assertEntriesActivated takes the whole harness down with it — so
+// the schema is proved here, where a mistake costs a line of output instead.
+check('the publish fields default to EMPTY, never to somebody else\'s account',
+  [Plugin.Config({}).publishOwner, Plugin.Config({}).leakScan], ['', ''])
+check('a non-string publish field is REFUSED by the schema rather than coerced',
+  (() => { try { Plugin.Config({ publishOwner: 42 }); return 'accepted' } catch { return 'refused' } })(),
+  'refused')
+check('and null is read as unset, which is the safe direction',
+  Plugin.Config({ publishOwner: null, leakScan: null }).publishOwner, '')
 
 // ---------------------------------------------------------------- boot the real ctx
 const root = mkdtempSync(join(tmpdir(), 'dpt-probe-'))
@@ -79,7 +97,12 @@ let activated = false
 ctx.plugin({
   name: Plugin.name,
   inject: Plugin.inject,
-  apply: (c) => { activated = true; return Plugin.apply(c) },
+  // Configured, so the HTTP-driven register probes exercise the configured
+  // path; the NO-config path is proved separately below.
+  apply: (c) => {
+    activated = true
+    return Plugin.apply(c, { timezone: TZ, publishOwner: PROBE_OWNER, leakScan: PROBE_SCAN })
+  },
 })
 await new Promise((r) => setTimeout(r, 400))
 
@@ -280,7 +303,10 @@ let toolActivated = false
 toolCtx.plugin({
   name: Plugin.name,
   inject: Plugin.inject,
-  apply: (c) => { toolActivated = true; return Plugin.apply(c, { timezone: TZ }) },
+  apply: (c) => {
+    toolActivated = true
+    return Plugin.apply(c, { timezone: TZ, publishOwner: PROBE_OWNER, leakScan: PROBE_SCAN })
+  },
 })
 await new Promise((r2) => setTimeout(r2, 500))
 
@@ -487,7 +513,12 @@ check('the gate reports EVERY item, passed ones included',
 check('and every one of them passes here', folio.plugins[0].checks.filter((item) => !item.ok).length, 0)
 check('a publishable plugin is handed the exact commands to publish it',
   [folio.plugins[0].commands.includes('git push -u origin main'),
-    folio.plugins[0].commands.includes('samorachumbi/dsh-demo')], [true, true])
+    // The CONFIGURED account and the CONFIGURED scanner — proof the value was
+    // read from config, not that some default happened to be in place.
+    folio.plugins[0].commands.includes(PROBE_OWNER + '/dsh-demo'),
+    folio.plugins[0].commands.includes('bash ' + PROBE_SCAN + ' .')], [true, true, true])
+check('and a row that HAS commands is given no reason for their absence',
+  folio.plugins[0].commandsNote, '')
 folio = await runTool('daily_plugin', { name: 'dsh-demo', hasScreenshot: false })
 check('daily_plugin UPDATES the same record rather than adding a second', folio.plugins.length, 1)
 check('a missing screenshot blocks it', folio.plugins[0].blockers.length, 1)
@@ -562,6 +593,62 @@ let bareActivated = false
 bareCtx.plugin({ name: Plugin.name, inject: Plugin.inject, apply: (c) => { bareActivated = true; return Plugin.apply(c, { timezone: TZ }) } })
 await new Promise((r2) => setTimeout(r2, 400))
 check('activates with NO tools service (optional dep)', { activated: bareActivated, route: bareRoute !== null }, { activated: true, route: true })
+
+// ---- a deployment that has configured NOTHING, which is the state a reader's
+// own instance starts in. Two things must hold: the commands are withheld, and
+// the row SAYS WHY. A green row above a silent blank is the one shape the
+// register's own `address` gate item exists to prevent.
+const noneTools = new Map()
+const noneCtx = new Context()
+noneCtx.provide('storageDomain', new DomainFacility({
+  storage: { backend: { get: (name) => (name === 'json' ? new JsonStorageBackend(mkdtempSync(join(tmpdir(), 'dpt-none-'))) : undefined) } },
+  emit: () => {}, logger: { warn: () => {} },
+}, { backend: 'json' }))
+noneCtx.provide('webServer', { register: () => () => {} })
+noneCtx.provide('tools', { register: (def) => { noneTools.set(def.name, def); return () => {} } })
+let noneActivated = false
+// NO config at all — not even a timezone. This is the state a reader's own
+// instance starts in, so it must activate AND withhold, and this is now the only
+// zero-config boot in the suite.
+noneCtx.plugin({
+  name: Plugin.name,
+  inject: Plugin.inject,
+  apply: (c) => { noneActivated = true; return Plugin.apply(c) },
+})
+await new Promise((r3) => setTimeout(r3, 500))
+check('activates with NO config at all', noneActivated, true)
+const noneTool = async (name, args) => {
+  const def = noneTools.get(name)
+  if (!def) throw new Error('no tool ' + name + ' on the unconfigured harness')
+  return await def.execute(args, {})
+}
+const noneView = await noneTool('daily_plugin', {
+  name: 'dsh-unconfigured', origin: 'ours', visibility: 'showcase', licence: 'MIT',
+  sourcePath: '~/projects/plugins/dsh-unconfigured',
+  hasLicenseFile: true, hasReadme: true, hasScreenshot: true, sourceOutsideProfile: true,
+  leakScanPassed: true, preflightPassed: true, preflightAt: expectedToday, gitReady: true,
+  verifiedAt: expectedToday,
+})
+check('with no publish owner configured the commands are WITHHELD',
+  noneView.plugins[0].commands, '')
+check('and the gate stays GREEN — a deployment setting is not a plugin defect',
+  [noneView.ready, noneView.plugins[0].blockers], [1, []])
+check('and the row names the field that would produce them',
+  [/no publish owner is configured/.test(noneView.plugins[0].commandsNote),
+    /publishOwner/.test(noneView.plugins[0].commandsNote)], [true, true])
+const noneDef = noneTools.get('daily_plugins')
+// The renderer hangs off `output`, and that is ASSERTED rather than guarded with
+// a typeof: the first version of this check read `def.render`, found undefined,
+// and quietly asserted on an empty string. A guard that hides its own cause turns
+// a real failure into a confusing one.
+check('daily_plugins exposes the renderer this check reads',
+  typeof noneDef.output.render, 'function')
+const noneText = noneDef.output.render({}, await noneTool('daily_plugins', {}))
+  .map((part) => part.text).join('\n')
+check('the tool report carries the reason, not just a blank where the shell should be',
+  /no publish owner is configured/.test(noneText), true)
+check('and it does not invite a paste it cannot supply',
+  /Paste this to publish it/.test(noneText), false)
 
 rmSync(toolRoot, { recursive: true, force: true })
 
@@ -939,7 +1026,7 @@ r = await post({ localDate: PROJ_DATE, tz: TZ, op: 'addPlugin', payload: {
   licence: 'MIT', sourcePath: '~/projects/plugins/dsh-cost-bubble', installed: true,
   hasLicenseFile: true, hasReadme: true, sourceOutsideProfile: true, leakScanPassed: true,
   preflightPassed: true, preflightAt: PROJ_DATE,
-  preflightNote: 'publish-scan clean; git tree clean at 33058be; 6 tracked files',
+  preflightNote: 'leak-scan clean over 6 tracked files; git tree clean at 33058be',
   gitReady: true, verifiedAt: PROJ_DATE,
 } })
 let folio2 = r.parsed.snapshot.portfolio

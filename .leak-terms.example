@@ -1,0 +1,11 @@
+# Copy to .leak-terms (gitignored) and put YOUR terms in it: one per line,
+# searched as literals, case-insensitively, over the files git tracks.
+#
+# What belongs here: the names of private projects and ventures, client names,
+# internal hostnames, account handles you do not publish under, the paths of
+# private directories, and any phrase from a document that must not leave the
+# machine. What does not: words that are generic to your trade, because a scan
+# that always fails is a scan nobody reads.
+acme-internal-project
+client-name-here
+~/private/

@@ -12,6 +12,7 @@ at `bedbd28de735ee1c49d684d922a3d8009bd21431` (see `UPSTREAM_COMMIT.txt`).
 > **The design record lives in this repository.** The ranking method is under [Ranking](#ranking),
 > the feedback-loop design under [The feedback loop (Live)](#the-feedback-loop-live), the state model
 > under [Storage](#storage), the publication gate under [What the gate shows](#what-the-gate-shows),
+> the two publish settings under [Configuration](#configuration),
 > and every defect this fork fixed under [Differences from upstream](#differences-from-upstream).
 > Where a fixed defect has a test, that test is the durable half of the record: it fails if the defect
 > comes back.
@@ -29,6 +30,15 @@ on screen is drawn by hand — but the ventures are invented. The page this plug
 author carries the author's actual register: revenue, kill-switches, live metrics. That is exactly
 the material the [portfolio gate](#what-the-gate-shows) exists to keep out of a public repository, so
 it is not what you are looking at.
+
+**The publish commands in that image name a placeholder account and the scanner that ships in this
+repository.** They are config values, not constants. An earlier version compiled the author's own
+GitHub account and the path to the author's private scanner into the command block, so every reader's
+page offered a command aimed at an account that was not theirs — and the leak scan reported CLEAN over
+it, because a lexical scan cannot tell an account name from a word. Set
+[`publishOwner`](#publish-owner-and-scanner) and the block is yours.
+
+[The image is three commands to reproduce](#reproducing-the-screenshot), not a hand-drawing.
 
 ## What you get
 
@@ -249,6 +259,13 @@ command builder returns the empty string, so neither the page nor the model has 
 Third-party work gets no checklist to work through either &mdash; a to-do list for something that must
 not happen reads as an invitation to start it.
 
+**A green row with no commands says why.** Publishing is a property of the plugin; the account to
+publish under is a property of the *deployment*. So a row that passes every item while no
+`publishOwner` is configured names that field on the row instead of sitting above nothing — the one
+shape the `address` gate item exists to prevent. The gate stays at twelve items: a setting nobody has
+filled in is not a defect in the plugin, and reddening every row for someone who never publishes would
+be worse than the blank it fixes. See [Publish owner and scanner](#publish-owner-and-scanner).
+
 **The plugin executes nothing.** There is no `child_process`: the agent runs the pre-flight (build,
 tests, leak scan) and records the outcome with its date, and the gate displays that note, so "the
 pre-flight passed" can always be read back and judged. The irreversible step &mdash; the push &mdash;
@@ -258,16 +275,40 @@ stays with a human; the toil does not.
 LICENSE, upstream attribution, README, screenshot, git repository, and recency. A fork must record its
 upstream repository and commit, and an unverified fact counts as missing rather than true.
 
-### Timezone
+### Configuration
 
-Browser requests carry the user's own zone and local date. Agent calls carry neither, so they
-resolve "today" from the plugin's config, which defaults to the host's zone:
+| field | default | what it does |
+|---|---|---|
+| `timezone` | the host's zone | the zone agent-initiated calls resolve "today" in. Browser requests carry the user's own zone and date; a tool call carries neither |
+| `publishOwner` | *(empty)* | the GitHub account the publish commands push to. **Empty withholds the commands** |
+| `leakScan` | *(empty)* | the scanner those commands run. **Empty emits an instruction instead** — never a path that exists on one machine and nowhere else |
 
 ```yaml
 - id: daily-progress-tab
   config:
     timezone: Africa/Nairobi
+    publishOwner: your-github-handle
+    leakScan: '~/projects/plugins/leak-scan.sh'   # QUOTED: a bare leading ~ is a YAML null
 ```
+
+### Publish owner and scanner
+
+These two belong to the deployment, not to the plugin, and neither has a default in code. **That is a
+fix, not a gap.** The command block used to be built from two constants holding the author's GitHub
+account and the path to the author's private scanner, so a reader's page handed over a command that
+pushed to an account that was not theirs. `tests/portfolio.test.ts` now asserts mechanically that
+neither constant can come back.
+
+What an unconfigured deployment gets, in order:
+
+- **No `publishOwner`** — the gate still reports every item, the row still says READY TO PUBLISH, no
+  commands are emitted, and the row names the field to set.
+- **No `leakScan`** — one line of the block becomes an instruction to run your own scan, so the rest of
+  the sequence stays usable. The repository ships one: `bash scripts/leak-scan.sh .` prints
+  `SCAN CLEAN` or the places that are not, never the secret it found.
+- **A value that is set but cannot be pasted** — a space, a `;`, a `$(…)` — yields **no** commands
+  rather than a different command. The text is copied and pasted, so a metacharacter in it is an
+  instruction to a shell.
 
 ## Suggestion chips
 
@@ -354,6 +395,12 @@ cp -r lib package.json "$DEST"/
 - insert:
     - id: daily-progress-tab
       name: 'dsh-daily-progress-tab'
+      config:
+        timezone: Africa/Nairobi
+        # Both optional, and empty means UNSET: with no publish owner the register
+        # withholds the publish commands and names the field on the row.
+        publishOwner: your-github-handle
+        leakScan: '~/projects/plugins/leak-scan.sh'
 ```
 
 Dependencies need no install: `@deepseek-ai/*` resolves through `~/.dsh/profiles/node_modules/`, the
@@ -368,9 +415,9 @@ with `Cannot read properties of undefined (reading 'prepare')`. Copy the package
 
 ```bash
 npm run typecheck   # tsc against the REAL @deepseek-ai types
-npm test            # 54 unit tests (scoring, ranking, monitoring, metrics, page structure, contrast)
+npm test            # 115 unit tests (scoring, ranking, monitoring, metrics, page structure, contrast, the scanner)
 npm run build       # tsc → lib/
-npm run probe       # 188 live probes: real cordis, real json backend, real tool registry
+npm run probe       # 299 live probes: real cordis, real json backend, real tool registry
 npm run render      # serve the page on a bare http server for pixel verification (see below)
 ```
 
@@ -385,23 +432,58 @@ what has to be real is the PAGE and the DATA.
 `createPlanner` over the real json store — and stubs only the host's route registration:
 
 ```bash
-PORT=3099 STORE_DIR=/tmp/dpt-boot/storages npm run render
+PORT=3179 STORE_DIR=/tmp/dsh-planner-render/storages npm run render
+PUBLISH_OWNER=your-github-handle LEAK_SCAN=scripts/leak-scan.sh node scripts/render-ui.mjs
 ```
 
-Then screenshot it — **in both themes**, because the page declares `prefers-color-scheme: light dark`
-and the render follows the OS, so a single screenshot silently verifies half its surfaces:
+Then screenshot it with the driver this repository ships — **in both themes**, because the page declares
+`prefers-color-scheme: light dark`, so a single screenshot silently verifies half its surfaces:
 
 ```bash
-# light and dark, deterministically, whichever way the OS is set
-chromium --headless=new --no-sandbox --disable-gpu --window-size=1400,4300 \
-  --virtual-time-budget=14000 --blink-settings=preferredColorScheme=1 \
-  --screenshot=$HOME/shots/light.png http://127.0.0.1:3099/daily-progress-tab/ui
-# …and preferredColorScheme=0 for dark
+node scripts/screenshot.mjs http://127.0.0.1:3179/daily-progress-tab/ui ~/shots/planner-dark.png \
+  --theme dark  --full --wait '.pfol-row'
+node scripts/screenshot.mjs http://127.0.0.1:3179/daily-progress-tab/ui ~/shots/planner-light.png \
+  --theme light --full --wait '.pfol-row'
 ```
 
-Note the screenshot path: Chromium here is snap-confined, so it writes `/tmp` screenshots into its
-own private namespace and is denied `~/.cache`. Use a visible path under `$HOME`, and check the file
-exists rather than trusting the "written to file" message.
+The theme is **forced** (`--blink-settings=preferredColorScheme`), not inherited: a snap Chromium
+cannot see the host theme, so an unforced render follows the OS and can differ between two runs minutes
+apart. `--wait` matters for the same reason a fragment link does not survive here: the rows arrive from
+a fetch *after* the load event, so "the HTML contains the string" proves nothing about what a reader
+sees.
+
+**Why the driver writes the file itself.** The PNG is written by the Node process from the base64 CDP
+returns, never by a browser-side `--screenshot` path — Chromium here is snap-confined, writes `/tmp`
+screenshots into its own private namespace and is denied `~/.cache`, and it reports success either way.
+Take the image from the process that can see the bytes, and write it to a visible path under `$HOME`.
+
+### Reproducing the screenshot
+
+The image at the top of this README is three commands and no hand-drawing. From an empty store:
+
+```bash
+# 1. serve the real page over a demo store (your values; this machine's real ports are refused)
+STORE_DIR=/tmp/demo-store PORT=3098 PUBLISH_OWNER=your-github-handle \
+  LEAK_SCAN=scripts/leak-scan.sh node scripts/render-ui.mjs &
+
+# 2. fill that store through the plugin's own /mutate API, so every record passes the
+#    schema it will be read back through, dated off today
+PORT=3098 python3 scripts/seed-demo-store.py
+
+# 3. grade the RENDERED DOM, then shoot it in both themes
+node scripts/screenshot.mjs http://127.0.0.1:3098/daily-progress-tab/ui docs/planner-dark.png \
+  --theme dark --full --wait '.pfol-row' --grade scripts/grade-demo.js
+node scripts/screenshot.mjs http://127.0.0.1:3098/daily-progress-tab/ui docs/planner-light.png \
+  --theme light --full --wait '.pfol-row' --grade scripts/grade-demo.js
+```
+
+`grade-demo.js` prints counts read from the rendered DOM — project cards, gate marks, the register's own
+count line. If a card did not render, the picture is not evidence of it, so the numbers are checked
+before the shutter: a first run of this chain produced a row that was 11-of-12 with no commands,
+because the sample record had no source path, and reading the DOM is what caught it.
+
+The seeder refuses a port it was not told to use, refuses this machine's real ports, and refuses a store
+holding records it did not write — it fills a demo, and the register it protects is not a demo.
 
 `probe` mounts the plugin on a real cordis `Context` with real service names, so a wrong name in
 `inject` fails the probe rather than passing silently — and it drives every tool, every suggestion
@@ -464,8 +546,8 @@ harness and the two-theme rule.
 
 **Added:** the standalone planner tab (no client bundle, so nothing for `dsh-client-modules` to
 compose), the ranked projects board, the Working/Pending/Live columns, the check-in feedback loop
-with staleness flagging, a per-project backlog, a task-level Now pick, the 21 agent tools, suggestion
-chips, bubble headings, `timezone` config,
+with staleness flagging, a per-project backlog, a task-level Now pick, the 28 agent tools, suggestion
+chips, bubble headings, the `timezone` / `publishOwner` / `leakScan` config fields,
 and the optional-`tools` registration.
 
 Known gap: no `src/invariant.ts` / `./invariant` export (the harness package convention).

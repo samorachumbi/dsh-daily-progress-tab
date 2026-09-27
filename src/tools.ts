@@ -563,6 +563,8 @@ interface PluginRowView {
   checks: GateCheckView[]
   /** The shell to paste to publish it. EMPTY when publishing is refused or impossible. */
   commands: string
+  /** Why a green row has no commands to paste. Empty when there is nothing to explain. */
+  commandsNote: string
 }
 
 /** One gate item as the model sees it. */
@@ -622,6 +624,7 @@ function portfolioReport(snapshot: Snapshot): PortfolioReport {
         fatal: item.fatal,
       })),
       commands: entry.commands,
+      commandsNote: entry.commandsNote,
     })),
   }
 }
@@ -664,6 +667,8 @@ const pluginRowSchema = {
     },
     /** EMPTY when publishing is refused or impossible. */
     commands: { type: 'string', required: true },
+    /** Why a green row has none. EMPTY when there is nothing to explain. */
+    commandsNote: { type: 'string', required: true },
   },
 } as const
 
@@ -723,6 +728,10 @@ function renderPortfolioReport(value: PortfolioReport): string {
         lines.push('')
         lines.push('   Paste this to publish it (step 1 is in the GitHub UI):')
         for (const line of plugin.commands.split('\n')) lines.push('     ' + line)
+      } else if (plugin.commandsNote !== '') {
+        // The one state that would otherwise be silent: the gate is green and
+        // there is nothing to paste. The model is told why, in the page's words.
+        lines.push('   ' + plugin.commandsNote)
       }
     }
   }

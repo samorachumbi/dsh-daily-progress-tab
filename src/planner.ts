@@ -19,7 +19,8 @@ import { DATE_RE, DEFAULT_SCOPE, isValidDateKey, recordKey } from './calendar.ts
 import { CHECKIN_VERDICTS, MAX_CHECKIN_ITEMS, MAX_SUGGESTIONS } from './domain.ts'
 import type { DailyProgressDomainSpec } from './domain.ts'
 import { MAX_CHECKIN_TEXT, MAX_NAME, MAX_SPARKS, MAX_SUMMARY, normalizeProject, rankProjects, scoreProject, sparkBoard } from './projects.ts'
-import { MAX_PLUGIN_REF, PLUGIN_ORIGINS, PLUGIN_STATUSES, PLUGIN_VISIBILITIES, portfolioView } from './portfolio.ts'
+import { MAX_PLUGIN_REF, NO_PUBLISH_SETTINGS, PLUGIN_ORIGINS, PLUGIN_STATUSES, PLUGIN_VISIBILITIES, portfolioView } from './portfolio.ts'
+import type { PublishSettings } from './portfolio.ts'
 import type {
   BacklogItem, Checkin, CheckinItem, CheckinVerdict, DayPlan, MutateErrorCode, MutateOp, MutateResult,
   PlanItem, PluginOrigin, PluginRecord, PluginStatus, PluginVisibility, PoolEntry, NowTask, Project,
@@ -64,7 +65,13 @@ export function normalizeText(value: unknown): string | null {
   return trimmed
 }
 
-export function createPlanner(domainPromise: Promise<Domain<DailyProgressDomainSpec>>): Planner {
+export function createPlanner(
+  domainPromise: Promise<Domain<DailyProgressDomainSpec>>,
+  // The deployment's publish values, threaded to the register on every read. Two
+  // optional strings, not a new service: the register is pure, and config is the
+  // only thing that differs between two runs of the same build.
+  publish: PublishSettings = NO_PUBLISH_SETTINGS,
+): Planner {
   let tablePromise: Promise<KvTable<string, DayPlan>> | null = null
   const table = (): Promise<KvTable<string, DayPlan>> => {
     tablePromise ??= domainPromise.then((domain) => domain.table('plans'))
@@ -429,7 +436,7 @@ export function createPlanner(domainPromise: Promise<Domain<DailyProgressDomainS
       pool,
       backlog: await listBacklog(),
       sparks: sparkBoard(await listSparks(), date),
-      portfolio: portfolioView(await listPlugins(), date),
+      portfolio: portfolioView(await listPlugins(), date, publish),
     }
   }
 

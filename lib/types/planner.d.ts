@@ -13,6 +13,7 @@
  */
 import type { Domain } from '@deepseek-ai/dsh-storage-domain';
 import type { DailyProgressDomainSpec } from './domain.ts';
+import type { PublishSettings } from './portfolio.ts';
 import type { MutateOp, MutateResult, Snapshot } from './types.ts';
 export declare const MAX_ITEMS = 50;
 export declare const MAX_TEXT = 500;
@@ -37,4 +38,4 @@ export interface Planner {
 /** A bounded, non-empty zone label; recorded for display only. */
 export declare function normalizeTz(value: unknown): string;
 export declare function normalizeText(value: unknown): string | null;
-export declare function createPlanner(domainPromise: Promise<Domain<DailyProgressDomainSpec>>): Planner;
+export declare function createPlanner(domainPromise: Promise<Domain<DailyProgressDomainSpec>>, publish?: PublishSettings): Planner;

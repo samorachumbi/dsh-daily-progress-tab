@@ -453,10 +453,21 @@ export interface PortfolioEntry extends PluginRecord {
   checks: GateCheck[]
   /**
    * The shell to paste to publish this plugin, or the EMPTY STRING when
-   * publishing it is refused or impossible. Empty is the affordance being
-   * ABSENT IN CODE rather than hidden at render time; see publishCommands.
+   * publishing it is refused or impossible — which includes a deployment that
+   * has configured no publish owner. Empty is the affordance being ABSENT IN
+   * CODE rather than hidden at render time; see publishCommands.
    */
   commands: string
+  /**
+   * Why a GREEN row is offered no commands, in the register's own words. Empty
+   * when there is nothing to explain.
+   *
+   * Set only for the reasons the gate deliberately does not carry: publishing is
+   * a property of the plugin, but the account and the scanner are properties of
+   * the DEPLOYMENT, so an unconfigured one must not turn every row red. See
+   * `withheldNote`.
+   */
+  commandsNote: string
 }
 
 /** The derived answer to "how many plugins have I created?". Never stored. */

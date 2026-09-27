@@ -50,14 +50,24 @@ export declare const MAX_PLUGIN_REF = 300;
  */
 export declare const VERIFY_STALE_DAYS = 30;
 /**
- * The GitHub account every plugin repository is published under. A constant
- * rather than a field on each record, because this value is composed into a
- * command the operator pastes into a shell: a URL assembled in three places is
- * a URL that eventually disagrees with itself.
+ * The deployment's own values for the command block, both supplied by config.
+ *
+ * These were CONSTANTS holding the author's GitHub account and the path to the
+ * author's private scanner, which shipped a command a reader cannot run, aimed
+ * at an account that is not theirs. A lexical leak scan cannot see that: an
+ * account is a handle and a scanner is a path, so the scan reported CLEAN while
+ * the rendered page handed over both. They are config now, with an empty
+ * default, and empty means UNSET.
+ *
+ * Both fields degrade to LESS, never to something else: an unset owner withholds
+ * the whole block, an unset scanner replaces one line with an instruction.
  */
-export declare const PUBLISH_OWNER = "samorachumbi";
-/** Where the leak scanner lives. Absolute, because the command runs from inside a repository. */
-export declare const PUBLISH_SCAN = "~/projects/plugins/publish-scan.sh";
+export interface PublishSettings {
+    owner: string;
+    scan: string;
+}
+/** Nothing configured. The safe default for every caller that has no config. */
+export declare const NO_PUBLISH_SETTINGS: PublishSettings;
 /** True when this plugin may ever be published, regardless of readiness. */
 export declare function isPublishable(plugin: PluginRecord): boolean;
 /**
@@ -94,14 +104,35 @@ export declare function verificationAgeDays(plugin: PluginRecord, today: string)
  * failed leak scan that means publishing something that must never be public.
  *
  * The text is COPIED AND PASTED, so a metacharacter inside it is an instruction
- * to a shell. Every interpolated value is matched against a bare-word pattern
- * first, and a value that fails yields NO commands rather than a different one.
+ * to a shell. Every interpolated value — the source path, the package name, the
+ * configured owner and the configured scanner — is matched against a bare-word
+ * pattern first, and a value that fails yields NO commands rather than a
+ * different one.
+ *
+ * The owner and the scanner have no default in code: they come from the
+ * deployment's config, and an unconfigured deployment gets no commands rather
+ * than somebody else's account. See `PublishSettings`.
  */
-export declare function publishCommands(plugin: PluginRecord, today?: string, owner?: string): string;
+export declare function publishCommands(plugin: PluginRecord, today?: string, settings?: PublishSettings): string;
+/**
+ * Why a GREEN row is offered no commands — the state that would otherwise be
+ * SILENT, and the whole reason this function exists.
+ *
+ * The register's own rule is that a blank panel must always have a reason:
+ * `address` is a gate item for exactly that purpose. A deployment with no publish
+ * owner configured is the one case the gate does not cover, because an account is
+ * a property of the deployment rather than of the plugin — so the reason is
+ * derived here instead of turning every publishable row red for someone who never
+ * publishes anything.
+ *
+ * Empty whenever there is nothing to explain: the commands are present, or the
+ * row already has a refusal or a failed gate item saying it.
+ */
+export declare function withheldNote(plugin: PluginRecord, today?: string, settings?: PublishSettings): string;
 export declare function portfolioCounts(plugins: readonly PluginRecord[]): PortfolioCounts;
 /**
  * The register as the page and the tools render it. Ordered by what to do next:
  * unpublished first, then fewest blockers, then name — so the row that needs one
  * more step sorts above the row that needs five.
  */
-export declare function portfolioView(plugins: readonly PluginRecord[], today?: string): Portfolio;
+export declare function portfolioView(plugins: readonly PluginRecord[], today?: string, settings?: PublishSettings): Portfolio;

@@ -1,3 +1,7 @@
 node_modules/
 *.log
 .DS_Store
+
+# The register publishes with a scanner that reads this list. It holds the words
+# particular to your own material, so it is never committed.
+.leak-terms

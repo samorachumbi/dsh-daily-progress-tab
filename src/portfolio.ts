@@ -57,15 +57,25 @@ export const MAX_PLUGIN_REF = 300
 export const VERIFY_STALE_DAYS = 30
 
 /**
- * The GitHub account every plugin repository is published under. A constant
- * rather than a field on each record, because this value is composed into a
- * command the operator pastes into a shell: a URL assembled in three places is
- * a URL that eventually disagrees with itself.
+ * The deployment's own values for the command block, both supplied by config.
+ *
+ * These were CONSTANTS holding the author's GitHub account and the path to the
+ * author's private scanner, which shipped a command a reader cannot run, aimed
+ * at an account that is not theirs. A lexical leak scan cannot see that: an
+ * account is a handle and a scanner is a path, so the scan reported CLEAN while
+ * the rendered page handed over both. They are config now, with an empty
+ * default, and empty means UNSET.
+ *
+ * Both fields degrade to LESS, never to something else: an unset owner withholds
+ * the whole block, an unset scanner replaces one line with an instruction.
  */
-export const PUBLISH_OWNER = 'samorachumbi'
+export interface PublishSettings {
+  owner: string
+  scan: string
+}
 
-/** Where the leak scanner lives. Absolute, because the command runs from inside a repository. */
-export const PUBLISH_SCAN = '~/projects/plugins/publish-scan.sh'
+/** Nothing configured. The safe default for every caller that has no config. */
+export const NO_PUBLISH_SETTINGS: PublishSettings = { owner: '', scan: '' }
 
 const DAY_MS = 86400000
 
@@ -214,10 +224,18 @@ export function verificationAgeDays(plugin: PluginRecord, today: string): number
  * failed leak scan that means publishing something that must never be public.
  *
  * The text is COPIED AND PASTED, so a metacharacter inside it is an instruction
- * to a shell. Every interpolated value is matched against a bare-word pattern
- * first, and a value that fails yields NO commands rather than a different one.
+ * to a shell. Every interpolated value — the source path, the package name, the
+ * configured owner and the configured scanner — is matched against a bare-word
+ * pattern first, and a value that fails yields NO commands rather than a
+ * different one.
+ *
+ * The owner and the scanner have no default in code: they come from the
+ * deployment's config, and an unconfigured deployment gets no commands rather
+ * than somebody else's account. See `PublishSettings`.
  */
-export function publishCommands(plugin: PluginRecord, today = '', owner = PUBLISH_OWNER): string {
+export function publishCommands(
+  plugin: PluginRecord, today = '', settings: PublishSettings = NO_PUBLISH_SETTINGS,
+): string {
   if (!isPublishable(plugin) || plugin.status === 'public') return ''
   // GREEN GATE FIRST, and the order is the safety property. A blocked plugin is
   // refused for the reason that matters, before any formatting detail about the
@@ -225,19 +243,32 @@ export function publishCommands(plugin: PluginRecord, today = '', owner = PUBLIS
   if (publishBlockers(plugin, today).length > 0) return ''
   // The same predicate the gate reports on, so a blank panel and a silently
   // empty string cannot part company.
-  if (!addressOk(plugin) || !SAFE_REPO_NAME.test(owner)) return ''
+  if (!addressOk(plugin)) return ''
+  // NO OWNER, NO COMMANDS. The repository URL cannot be composed without an
+  // account, and an account this register was not told is not one to guess at:
+  // a placeholder pasted into a shell is a push to somewhere unintended.
+  if (!SAFE_REPO_NAME.test(settings.owner)) return ''
+  // A CONFIGURED scanner that cannot be pasted withholds everything, exactly as
+  // a bad owner does — the value is an instruction to a shell either way.
+  if (settings.scan !== '' && !SAFE_WORD.test(settings.scan)) return ''
   const path = pastablePath(plugin)
   const name = plugin.name.trim()
+  // An UNSET scanner degrades ONE LINE instead of the whole block: the rest of
+  // the sequence is still what the reader needs, and a command pointing at a
+  // file only the author has is worse than no command at all.
+  const scanLine = settings.scan === ''
+    ? '# scan this tree for anything that must not be public — config: leakScan'
+    : 'bash ' + settings.scan + ' .        # must print SCAN CLEAN'
   return [
-    '# Publish ' + name + ' as ' + owner + '/' + name,
+    '# Publish ' + name + ' as ' + settings.owner + '/' + name,
     '# 1. Create the repository on GitHub FIRST and leave it EMPTY:',
     '#    name ' + name + ', no README, no licence, no .gitignore.',
     'cd ' + path,
-    'bash ' + PUBLISH_SCAN + ' .        # must print SCAN CLEAN',
+    scanLine,
     'git status --porcelain     # must print NOTHING',
     'git log --oneline -1       # must be the commit you mean to publish',
     'git remote -v              # must NOT already list origin',
-    'git remote add origin https://github.com/' + owner + '/' + name + '.git',
+    'git remote add origin https://github.com/' + settings.owner + '/' + name + '.git',
     'git push -u origin main',
     '',
     '# 2. Run this repository own build and tests BEFORE step 3, and record the',
@@ -246,6 +277,44 @@ export function publishCommands(plugin: PluginRecord, today = '', owner = PUBLIS
     '# 3. Then set the description and topics in the GitHub UI, and read the',
     '#    rendered README once before anyone else does.',
   ].join('\n')
+}
+
+/**
+ * Why a GREEN row is offered no commands — the state that would otherwise be
+ * SILENT, and the whole reason this function exists.
+ *
+ * The register's own rule is that a blank panel must always have a reason:
+ * `address` is a gate item for exactly that purpose. A deployment with no publish
+ * owner configured is the one case the gate does not cover, because an account is
+ * a property of the deployment rather than of the plugin — so the reason is
+ * derived here instead of turning every publishable row red for someone who never
+ * publishes anything.
+ *
+ * Empty whenever there is nothing to explain: the commands are present, or the
+ * row already has a refusal or a failed gate item saying it.
+ */
+export function withheldNote(
+  plugin: PluginRecord, today = '', settings: PublishSettings = NO_PUBLISH_SETTINGS,
+): string {
+  if (publishCommands(plugin, today, settings) !== '') return ''
+  // A refusal or a failed gate item is already reported on the row; repeating it
+  // here would be a second, differently worded answer to the same question.
+  if (!isPublishable(plugin) || plugin.status === 'public') return ''
+  if (publishBlockers(plugin, today).length > 0) return ''
+  // The `address` item covers an unpasteable source path or package name.
+  if (!addressOk(plugin)) return ''
+  // Past this point the commands can only be missing because of config, and the
+  // three cases are exhaustive — so no state is left silent.
+  if (settings.owner === '') {
+    return "no publish owner is configured — set publishOwner in this plugin's config to get the commands"
+  }
+  if (!SAFE_REPO_NAME.test(settings.owner)) {
+    return 'the configured publishOwner cannot be pasted into a shell — no command is handed over until it can'
+  }
+  if (settings.scan !== '' && !SAFE_WORD.test(settings.scan)) {
+    return 'the configured leakScan cannot be pasted into a shell — no command is handed over until it can'
+  }
+  return ''
 }
 
 export function portfolioCounts(plugins: readonly PluginRecord[]): PortfolioCounts {
@@ -285,7 +354,9 @@ export function portfolioCounts(plugins: readonly PluginRecord[]): PortfolioCoun
  * unpublished first, then fewest blockers, then name — so the row that needs one
  * more step sorts above the row that needs five.
  */
-export function portfolioView(plugins: readonly PluginRecord[], today = ''): Portfolio {
+export function portfolioView(
+  plugins: readonly PluginRecord[], today = '', settings: PublishSettings = NO_PUBLISH_SETTINGS,
+): Portfolio {
   const entries: PortfolioEntry[] = plugins.map((plugin) => ({
     ...plugin,
     publishable: isPublishable(plugin),
@@ -294,7 +365,10 @@ export function portfolioView(plugins: readonly PluginRecord[], today = ''): Por
     // Derived here, once, so the page and the model cannot be shown different
     // checklists for the same record.
     checks: gateChecks(plugin, today),
-    commands: publishCommands(plugin, today),
+    commands: publishCommands(plugin, today, settings),
+    // Derived from the same two inputs, so a row cannot show commands and a
+    // reason for not showing them at once.
+    commandsNote: withheldNote(plugin, today, settings),
   }))
   entries.sort((a, b) => {
     if ((a.status === 'public') !== (b.status === 'public')) return a.status === 'public' ? 1 : -1

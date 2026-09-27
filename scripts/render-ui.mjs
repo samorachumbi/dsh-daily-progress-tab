@@ -17,8 +17,9 @@
  * It is a VERIFICATION TOOL, not a way to run the planner: it has no session, no
  * agent tools and no harness. Installed use still belongs in a real profile.
  *
- *   node scripts/render-ui.mjs                 # port 3099, store /tmp/dpt-boot/storages
- *   PORT=3100 STORE_DIR=~/.dsh/storages node scripts/render-ui.mjs
+ *   node scripts/render-ui.mjs                 # port 3179, store /tmp/dsh-planner-render/storages
+ *   PORT=3180 STORE_DIR=~/.dsh/storages node scripts/render-ui.mjs
+ *   PUBLISH_OWNER=your-handle LEAK_SCAN='scripts/leak-scan.sh' node scripts/render-ui.mjs
  *
  * Then screenshot it — in BOTH themes, because the page declares
  * `prefers-color-scheme: light dark` and a single render silently verifies half
@@ -35,9 +36,19 @@ const { dailyProgressDomain } = await import('../lib/domain.js')
 const { createPlanner } = await import('../lib/planner.js')
 const { createHandlers } = await import('../lib/routes.js')
 
-const storeDir = (process.env.STORE_DIR ?? '/tmp/dpt-boot/storages').replace(/^~/, homedir())
-const port = Number(process.env.PORT ?? 3099)
+// The defaults are a SCRATCH port and a scratch store on purpose: a harness
+// shipped to other people must not default onto the port or the data of
+// somebody's real instance. Pass PORT/STORE_DIR to point it at one.
+const storeDir = (process.env.STORE_DIR ?? '/tmp/dsh-planner-render/storages').replace(/^~/, homedir())
+const port = Number(process.env.PORT ?? 3179)
 const tzLabel = process.env.TZ_LABEL ?? 'Africa/Nairobi'
+// The two publish values the register needs. Unset in, unset out: the page then
+// shows the withheld state, which is what a reader's own instance shows until
+// they configure their handle.
+const publish = {
+  owner: (process.env.PUBLISH_OWNER ?? '').trim(),
+  scan: (process.env.LEAK_SCAN ?? '').trim(),
+}
 
 /** The harness has no browser, so it resolves "today" from one configured zone. */
 const dateKey = () => new Intl.DateTimeFormat('en-CA', {
@@ -51,7 +62,7 @@ const facility = new DomainFacility({
 }, { backend: 'json' })
 
 const domain = await facility.open(dailyProgressDomain)
-const handlers = createHandlers(createPlanner(Promise.resolve(domain)), dateKey)
+const handlers = createHandlers(createPlanner(Promise.resolve(domain), publish), dateKey)
 
 const server = createServer((req, res) => {
   Promise.resolve(handlers.handle(req, res)).catch((error) => {
@@ -68,4 +79,9 @@ server.listen(port, '127.0.0.1', () => {
   console.log('render harness  http://127.0.0.1:' + port + '/daily-progress-tab/ui')
   console.log('store           ' + storeDir)
   console.log('today (' + tzLabel + ')  ' + dateKey())
+  // Printed, not assumed: which values the render carried is part of what the
+  // screenshot is a claim about.
+  console.log('publish         ' + (publish.owner === ''
+    ? 'no owner configured — publish commands withheld'
+    : publish.owner + ' · ' + (publish.scan === '' ? 'no scanner configured' : publish.scan)))
 })

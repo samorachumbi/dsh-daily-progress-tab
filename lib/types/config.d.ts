@@ -8,6 +8,11 @@
  * solve: browser requests carry the user's own zone and local date, while
  * AGENT-initiated calls (the `daily_*` tools) carry neither. Those resolve
  * "today" from this zone, which defaults to the host's zone at load.
+ *
+ * `publishOwner` and `leakScan` exist for the opposite reason: they are values
+ * the AUTHOR of a deployment supplies, so shipping a value in code hands a reader
+ * a command aimed at somebody else's account. Both default to EMPTY, and empty
+ * means unset — see `PublishSettings` in portfolio.ts.
  * @module dsh-daily-progress-tab/config
  */
 import z from '@deepseek-ai/schemastery';
@@ -16,7 +21,30 @@ export declare function hostTimezone(): string;
 export interface PluginConfig {
     /** IANA zone used to resolve "today" for agent-initiated calls. */
     timezone: string;
+    /**
+     * The GitHub account the publish commands push to.
+     *
+     * EMPTY MEANS UNSET, and unset is the safe direction: the register then
+     * withholds the commands entirely rather than naming an account that is not
+     * yours.
+     */
+    publishOwner: string;
+    /**
+     * The leak scanner the publish commands run before the push.
+     *
+     * Empty means unset: the emitted block tells the reader to run their own scan
+     * instead of pointing at a path that exists on one machine and nowhere else.
+     */
+    leakScan: string;
 }
 export declare const Config: z<PluginConfig>;
+/**
+ * A config string, trimmed; '' for anything absent, empty or not a string.
+ *
+ * So a caller can treat "no value" and "not configured" as one case — which is
+ * exactly what both publish fields need, and it lets a value with stray
+ * whitespace work instead of being refused by the shell-safety guards.
+ */
+export declare function settingText(value: unknown): string;
 /** The local YYYY-MM-DD date in `timezone` at `at`. Falls back to UTC on a bad zone. */
 export declare function localDateIn(timezone: string, at?: Date): string;

@@ -156,6 +156,10 @@ export const UI_HTML = `<!doctype html>
   /* No colour on the copy button: it is a .ghost button and keeps that fill. A
      colour declared here would be overruled on every element using this class. */
   .pfol-copy { margin-top: 6px; }
+  /* The note shown when a row is green and has no commands to paste. MUTED, not
+     amber: nothing on the row is broken or overdue, and amber here would read as
+     work to do - which is what the checklist uses it for. */
+  .pfol-note { font-size: 11px; color: var(--muted); margin-top: 7px; }
   .pfol-cmd pre { font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
                   background: var(--chip); border: 1px solid var(--line); border-radius: 8px;
                   padding: 8px 10px; margin: 5px 0 0; }
@@ -1511,6 +1515,14 @@ export const UI_HTML = `<!doctype html>
       copy.addEventListener("click", function () { copyText(this, pre.textContent); });
       cmd.appendChild(copy);
       row.appendChild(cmd);
+    } else if (p.commandsNote) {
+      // A green row with nothing to paste is the one state that would otherwise
+      // be silent. It explains the missing affordance in the register's own
+      // words - a note, not an error: nothing on this row is broken.
+      var hint = document.createElement("div");
+      hint.className = "pfol-note";
+      hint.textContent = p.commandsNote;
+      row.appendChild(hint);
     }
     return row;
   }

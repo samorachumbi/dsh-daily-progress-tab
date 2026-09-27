@@ -25,7 +25,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
-import { Config, hostTimezone, localDateIn } from './config.ts'
+import { Config, hostTimezone, localDateIn, settingText } from './config.ts'
 import type { PluginConfig } from './config.ts'
 import { dailyProgressDomain } from './domain.ts'
 import type { DailyProgressDomainSpec } from './domain.ts'
@@ -48,6 +48,15 @@ export function apply(ctx: Context, config: PluginConfig): void {
     : hostTimezone()
   const today = (): string => localDateIn(timezone)
 
+  // The two publish values, read the same defensive way as `timezone`. Empty
+  // means UNSET: an unconfigured deployment withholds the publish commands
+  // rather than naming an account — this plugin ships no owner and no scanner
+  // path of its own.
+  const publish = {
+    owner: settingText(config?.publishOwner),
+    scan: settingText(config?.leakScan),
+  }
+
   // Open resolves against the routed backend; the planner resolves the table
   // lazily, per request.
   const domainPromise: Promise<Domain<DailyProgressDomainSpec>> = ctx.storageDomain.open(dailyProgressDomain)
@@ -62,7 +71,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
     }
   }, 'daily-progress-tab.domainClose')
 
-  const planner = createPlanner(domainPromise)
+  const planner = createPlanner(domainPromise, publish)
 
   const handlers = createHandlers(planner, today)
   const dispose = ctx.webServer.register({

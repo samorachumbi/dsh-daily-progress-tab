@@ -1,10 +1,12 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
-  VERIFY_STALE_DAYS, gateChecks, isPublishable, portfolioCounts, portfolioView,
-  publishBlockers, publishCommands,
+  NO_PUBLISH_SETTINGS, VERIFY_STALE_DAYS, gateChecks, isPublishable, portfolioCounts, portfolioView,
+  publishBlockers, publishCommands, withheldNote,
 } from '../src/portfolio.ts'
 import type { PluginRecord } from '../src/types.ts'
+import type { PublishSettings } from '../src/portfolio.ts'
 
 /** A plugin that is ready in every respect, so each test can remove exactly one. */
 function plugin(overrides: Partial<PluginRecord> = {}): PluginRecord {
@@ -33,6 +35,17 @@ function plugin(overrides: Partial<PluginRecord> = {}): PluginRecord {
 }
 
 const TODAY = '2026-09-26'
+
+/**
+ * A CONFIGURED deployment.
+ *
+ * The owner and the scanner are config now, not constants. As constants they held
+ * the author's GitHub account and the path to the author's private scanner, so
+ * every reader's page offered a command aimed at an account that was not theirs.
+ * Nothing here is the author's: a fixture in a public repository must be
+ * reproducible by the reader who runs it.
+ */
+const SETTINGS: PublishSettings = { owner: 'octo-dev', scan: '~/bin/leak-scan.sh' }
 
 describe('the publish gate', () => {
   it('passes a fully-verified plugin of ours', () => {
@@ -223,11 +236,11 @@ describe('the gate as a checklist', () => {
 
 describe('the commands offered to publish', () => {
   it('carries the whole sequence for a publishable plugin', () => {
-    const commands = publishCommands(plugin())
-    assert.match(commands, /^# Publish dsh-cost-bubble as samorachumbi\/dsh-cost-bubble/m)
-    assert.ok(commands.includes('publish-scan.sh'))
+    const commands = publishCommands(plugin(), TODAY, SETTINGS)
+    assert.match(commands, /^# Publish dsh-cost-bubble as octo-dev\/dsh-cost-bubble/m)
+    assert.ok(commands.includes('bash ~/bin/leak-scan.sh .'))
     assert.ok(commands.includes('cd ~/projects/plugins/dsh-cost-bubble'))
-    assert.ok(commands.includes('git remote add origin https://github.com/samorachumbi/dsh-cost-bubble.git'))
+    assert.ok(commands.includes('git remote add origin https://github.com/octo-dev/dsh-cost-bubble.git'))
     assert.ok(commands.includes('git push -u origin main'))
   })
 
@@ -235,14 +248,14 @@ describe('the commands offered to publish', () => {
     // The affordance is absent in code, not hidden at render time: there is
     // nothing here for a page to switch off and nothing for the model to hand
     // over. This is the property that makes any publish button safe to ship.
-    assert.equal(publishCommands(plugin({ origin: 'third-party' })), '')
-    assert.equal(publishCommands(plugin({ origin: 'third-party', visibility: 'showcase' })), '')
-    assert.equal(publishCommands(plugin({ visibility: 'internal' })), '')
-    assert.equal(publishCommands(plugin({ status: 'public' })), '')
+    assert.equal(publishCommands(plugin({ origin: 'third-party' }), TODAY, SETTINGS), '')
+    assert.equal(publishCommands(plugin({ origin: 'third-party', visibility: 'showcase' }), TODAY, SETTINGS), '')
+    assert.equal(publishCommands(plugin({ visibility: 'internal' }), TODAY, SETTINGS), '')
+    assert.equal(publishCommands(plugin({ status: 'public' }), TODAY, SETTINGS), '')
     // The control: the same record with none of those three flags DOES get them.
     // A fork needs its upstream recorded before the gate is green, and that is a
     // gate item rather than part of this refusal, so it is supplied here.
-    assert.ok(publishCommands(plugin({ origin: 'fork', upstream: 'omdsh-dev/x@bedbd28' }), TODAY)
+    assert.ok(publishCommands(plugin({ origin: 'fork', upstream: 'omdsh-dev/x@bedbd28' }), TODAY, SETTINGS)
       .includes('git push -u origin main'))
   })
 
@@ -250,14 +263,15 @@ describe('the commands offered to publish', () => {
     // The text is COPIED AND PASTED, so a metacharacter inside it is an
     // instruction to a shell. A path that is not a bare word yields NO commands
     // rather than a command that does something else.
-    assert.equal(publishCommands(plugin({ sourcePath: undefined })), '')
-    assert.equal(publishCommands(plugin({ sourcePath: '   ' })), '')
+    assert.equal(publishCommands(plugin({ sourcePath: undefined }), TODAY, SETTINGS), '')
+    assert.equal(publishCommands(plugin({ sourcePath: '   ' }), TODAY, SETTINGS), '')
     const hostile = [
       '~/x; rm -rf /', '~/a b', '~/x$(whoami)', '~/x`id`', '~/x\nls',
       '~/x|tee /etc/passwd', '~/x&', '~/x>out', '~/x"y"', "~/x'y'", '~/x*y',
     ]
     for (const path of hostile) {
-      assert.equal(publishCommands(plugin({ sourcePath: path })), '', 'accepted ' + JSON.stringify(path))
+      assert.equal(publishCommands(plugin({ sourcePath: path }), TODAY, SETTINGS), '',
+        'accepted ' + JSON.stringify(path))
     }
   })
 
@@ -265,26 +279,87 @@ describe('the commands offered to publish', () => {
     // The positive half: what IS emitted must be inert. Trailing newlines and a
     // leading dot are exercised too, because the pattern is a whitelist and a
     // whitelist is only as good as the characters it actually rejects.
-    const commands = publishCommands(plugin())
+    const commands = publishCommands(plugin(), TODAY, SETTINGS)
+    // NON-VACUITY FIRST. With no configured deployment this block is empty, and
+    // three assertions about an empty string prove nothing — this test passed
+    // vacuously for the length of one edit, because a marker collided with the
+    // same line inserted by another edit and the change was skipped. A check that
+    // cannot fail is not a check.
+    assert.ok(commands.length > 100, 'the fixture emitted nothing to inspect')
     assert.equal(/[`$]/.test(commands), false)
     assert.equal(/\$\(/.test(commands), false)
     assert.equal(/\n\nrm/.test(commands), false)
   })
 
-  it('is EMPTY for a name or owner that is not a repository name', () => {
-    assert.equal(publishCommands(plugin({ name: 'a b' })), '')
-    assert.equal(publishCommands(plugin({ name: '../escape' })), '')
-    // The owner is the THIRD argument: it was second before 'today' was added,
-    // which is exactly the kind of quiet reshuffle a test has to catch.
-    assert.equal(publishCommands(plugin(), TODAY, 'samora; rm -rf /'), '')
-    assert.equal(publishCommands(plugin(), TODAY, ''), '')
+  it('is EMPTY for a name that is not a repository name', () => {
+    assert.equal(publishCommands(plugin({ name: 'a b' }), TODAY, SETTINGS), '')
+    assert.equal(publishCommands(plugin({ name: '../escape' }), TODAY, SETTINGS), '')
+  })
+
+  it('withholds every command when the deployment has no publish owner', () => {
+    // The default, and the state a reader's own instance starts in. Withholding
+    // is the safe direction: with no account there is no repository URL to
+    // compose, and a placeholder pasted into a shell is a push to a place nobody
+    // intended. An old version of this file answered with the AUTHOR's account.
+    assert.equal(publishCommands(plugin(), TODAY), '')
+    assert.equal(publishCommands(plugin(), TODAY, NO_PUBLISH_SETTINGS), '')
+    // A scanner alone does not make a block publishable: the account is the part
+    // that cannot be substituted.
+    assert.equal(publishCommands(plugin(), TODAY, { owner: '', scan: SETTINGS.scan }), '')
+  })
+
+  it('is EMPTY for an owner that is not a GitHub account name', () => {
+    for (const owner of ['samora; rm -rf /', 'a b', '', '   ', 'x/y', '$(id)', '-lead', 'x`id`']) {
+      assert.equal(publishCommands(plugin(), TODAY, { owner, scan: SETTINGS.scan }), '',
+        'accepted ' + JSON.stringify(owner))
+    }
+    // The control: the characters GitHub actually allows in an account name pass.
+    assert.ok(publishCommands(plugin(), TODAY, { owner: 'octo-dev.9_x', scan: '~/.local/bin/scan.sh' })
+      .includes('octo-dev.9_x/dsh-cost-bubble'))
+  })
+
+  it('degrades ONE line, not the block, when no scanner is configured', () => {
+    // The rest of the sequence is still what the reader needs, so an unset
+    // scanner replaces its own line. What it must never do is point at a file
+    // that exists on the author's machine and nowhere else.
+    const commands = publishCommands(plugin(), TODAY, { owner: SETTINGS.owner, scan: '' })
+    assert.ok(commands.includes('git push -u origin main'))
+    assert.ok(commands.includes('# scan this tree for anything that must not be public'))
+    // It names the field, so the reader can wire it instead of guessing.
+    assert.ok(commands.includes('leakScan'))
+    assert.equal(/^bash /m.test(commands), false, 'emitted a scanner command with no scanner configured')
+  })
+
+  it('is EMPTY for a configured scanner that cannot be pasted', () => {
+    // A configured value IS an instruction to a shell, so a bad one withholds
+    // everything — it never yields a different command.
+    for (const scan of ['~/x; rm -rf /', '~/a b', '~/x$(id)', '~/x`id`', '~/x|tee /etc/passwd', '~/x&']) {
+      assert.equal(publishCommands(plugin(), TODAY, { owner: SETTINGS.owner, scan }), '',
+        'accepted ' + JSON.stringify(scan))
+    }
+  })
+
+  it('ships no account and no scanner path of its own', () => {
+    // THE REGRESSION GUARD, and it is mechanical on purpose. The defect: two
+    // constants named the author's GitHub account and the author's private
+    // scanner, so the emitted block was a command a reader could not run, aimed
+    // at an account that was not theirs — and the leak scan reported CLEAN,
+    // because a lexical scan cannot tell a handle from a word.
+    //
+    // It is VALUE-FREE deliberately: asserting the absence of the author's handle
+    // would write the handle into a repository that has no business carrying it.
+    // So the check is on the mechanism that made the defect expressible, plus the
+    // behaviour a reader actually meets.
+    const source = readFileSync(new URL('../src/portfolio.ts', import.meta.url), 'utf8')
+    assert.equal(source.match(/PUBLISH_OWNER|PUBLISH_SCAN/), null)
+    assert.deepEqual(NO_PUBLISH_SETTINGS, { owner: '', scan: '' })
   })
 
   it('reaches the page on the entry, so the two views cannot differ', () => {
     const internal = portfolioView([plugin({ visibility: 'internal' })], TODAY)
     assert.equal(internal.entries[0]?.commands, '')
     assert.equal(internal.entries[0]?.checks.every((item) => item.name.length > 0), true)
-    const ready = portfolioView([plugin()], TODAY)
+    const ready = portfolioView([plugin()], TODAY, SETTINGS)
     assert.ok(ready.entries[0]?.commands.includes('git push -u origin main'))
   })
 
@@ -306,7 +381,7 @@ describe('the commands offered to publish', () => {
     ]
     let green = 0
     for (const sample of samples) {
-      const commands = publishCommands(sample, TODAY)
+      const commands = publishCommands(sample, TODAY, SETTINGS)
       const allowed = isPublishable(sample) && sample.status !== 'public'
       if (!allowed) {
         assert.equal(commands, '', 'offered commands for ' + sample.origin + '/' + sample.visibility)
@@ -323,7 +398,53 @@ describe('the commands offered to publish', () => {
     // green, which is the only case where a blank panel would otherwise be silent.
     const bad = plugin({ sourcePath: '~/a b' })
     assert.deepEqual(gateChecks(bad, TODAY).filter((item) => !item.ok).map((item) => item.key), ['address'])
-    assert.equal(publishCommands(bad, TODAY), '')
+    assert.equal(publishCommands(bad, TODAY, SETTINGS), '')
     assert.ok(gateChecks(plugin(), TODAY).find((item) => item.key === 'address')?.ok)
+  })
+})
+
+describe('a green row with nothing to paste says why', () => {
+  it('names the missing config field instead of rendering nothing', () => {
+    // Found by wiring the two config fields: without this, an unconfigured
+    // deployment rendered "READY TO PUBLISH — every item above passes" above
+    // NOTHING. That is the exact self-contradiction the `address` gate item
+    // exists to prevent, so the reason is derived onto the entry instead.
+    //
+    // The gate stays TWELVE items: the account is a property of the deployment,
+    // not a defect in the plugin, and reddening every row for someone who never
+    // publishes would be worse than the blank it fixes.
+    const entry = portfolioView([plugin()], TODAY).entries[0]
+    assert.equal(entry?.commands, '')
+    assert.match(entry?.commandsNote ?? '', /no publish owner is configured/)
+    assert.match(entry?.commandsNote ?? '', /publishOwner/)
+    // The gate itself is untouched by it, in both directions.
+    assert.deepEqual(entry?.blockers, [])
+    assert.equal(entry?.checks.filter((item) => !item.ok).length, 0)
+    // And with a configured deployment there is nothing to explain.
+    assert.equal(portfolioView([plugin()], TODAY, SETTINGS).entries[0]?.commandsNote, '')
+  })
+
+  it('says nothing when the row already has its own answer', () => {
+    // A refusal and a failed gate item are reported on the row already; a second
+    // reason in different words would be two answers to one question.
+    const quiet = [
+      plugin({ origin: 'third-party', visibility: 'internal' }),
+      plugin({ visibility: 'internal' }),
+      plugin({ hasScreenshot: false }),
+      plugin({ sourcePath: '~/a b' }),
+      plugin({ status: 'public' }),
+    ]
+    for (const sample of quiet) {
+      assert.equal(portfolioView([sample], TODAY).entries[0]?.commandsNote, '',
+        'explained a row that already had an answer: ' + sample.origin + '/' + sample.visibility)
+    }
+    assert.equal(withheldNote(plugin(), TODAY, SETTINGS), '')
+  })
+
+  it('explains a configured value it cannot hand over', () => {
+    // The other states that would otherwise be silent: config IS set, and cannot
+    // be pasted. Both are named rather than swallowed.
+    assert.match(withheldNote(plugin(), TODAY, { owner: 'a b', scan: '' }), /publishOwner cannot be pasted/)
+    assert.match(withheldNote(plugin(), TODAY, { owner: SETTINGS.owner, scan: '~/a b' }), /leakScan cannot be pasted/)
   })
 })
