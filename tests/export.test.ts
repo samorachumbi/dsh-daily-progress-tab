@@ -24,7 +24,7 @@ function entry(overrides: Partial<PortfolioEntry> = {}): PortfolioEntry {
     licence: 'MIT',
     summary: 'A draggable pill showing the live cost of the current chat.',
     sourcePath: '~/projects/plugins/dsh-cost-bubble',
-    publicUrl: 'https://github.com/samorachumbi/dsh-cost-bubble',
+    publicUrl: 'https://github.com/octo-dev/dsh-cost-bubble',
     upstream: '',
     installed: true,
     hasLicenseFile: true,
@@ -43,7 +43,7 @@ function entry(overrides: Partial<PortfolioEntry> = {}): PortfolioEntry {
     blockers: [],
     verifiedDaysAgo: 3,
     checks: [],
-    commands: 'bash ~/projects/plugins/publish-scan.sh .   # must print SCAN CLEAN',
+    commands: 'bash ~/bin/leak-scan.sh .   # must print SCAN CLEAN',
     commandsNote: '',
     ...overrides,
   }
@@ -78,7 +78,7 @@ describe('what the export refuses to publish', () => {
 
   it('carries no gate internals: no commands, no scan notes, no private paths', () => {
     const block = renderExportBlock([entry()])
-    assert.equal(block.includes('publish-scan'), false, 'a private scanner path reached the résumé')
+    assert.equal(block.includes('leak-scan.sh'), false, 'the command the register holds reached the résumé')
     assert.equal(block.includes('SCAN CLEAN'), false, 'the publish command reached the résumé')
     assert.equal(block.includes('tracked files'), false, "the pre-flight note reached the résumé")
     assert.equal(block.includes('TODO'), false)

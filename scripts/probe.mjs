@@ -594,7 +594,7 @@ const resume = await runTool('daily_export', {})
 check('daily_export renders the block with both markers',
   [resume.block.startsWith(EXPORT_BEGIN), resume.block.trimEnd().endsWith(EXPORT_END)], [true, true])
 check('the public block carries none of the gate\'s language',
-  [/publish-scan/.test(resume.block), /SCAN CLEAN/.test(resume.block), /probe-scan/.test(resume.block),
+  [/^bash /m.test(resume.block), /SCAN CLEAN/.test(resume.block), /\/home\//.test(resume.block),
     /TODO/.test(resume.block), /pass\b/.test(resume.block)], [false, false, false, false, false])
 check('with nothing public it says so instead of emitting an empty list',
   [resume.published, /Nothing published yet\./.test(resume.block)], [0, true])
