@@ -453,9 +453,9 @@ with `Cannot read properties of undefined (reading 'prepare')`. Copy the package
 
 ```bash
 npm run typecheck   # tsc against the REAL @deepseek-ai types
-npm test            # 115 unit tests (scoring, ranking, monitoring, metrics, page structure, contrast, the scanner)
+npm test            # 128 unit tests (scoring, ranking, monitoring, metrics, page structure, contrast, the scanner)
 npm run build       # tsc → lib/
-npm run probe       # 299 live probes: real cordis, real json backend, real tool registry
+npm run probe       # 312 live probes: real cordis, real json backend, real tool registry
 npm run render      # serve the page on a bare http server for pixel verification (see below)
 ```
 

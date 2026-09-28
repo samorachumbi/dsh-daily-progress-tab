@@ -19,8 +19,8 @@
  *     refusal: someone else's work is not ours to advertise, and work marked internal is
  *     internal.
  *   - **No gate internals.** No commands, no pre-flight notes, no scan dates: they are
- *     the console's language, and one of them (`~/projects/plugins/publish-scan.sh`)
- *     is a private path.
+ *     the console's language, and one of them is a private scanner path that exists
+ *     only on the operator's machine.
  *   - **No silent append.** `spliceExport` refuses a document whose markers are missing
  *     or out of order, because appending a generated block to a hand-written file turns a
  *     readme into a mess the first time the marker is renamed.
