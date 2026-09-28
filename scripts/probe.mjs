@@ -110,6 +110,31 @@ check('plugin ACTIVATED on real cordis (inject resolved)', activated, true)
 check('plugin registered a route', route !== null, true)
 check('route prefix is fork-specific', route && route.path, '/daily-progress-tab')
 
+// ------------------------------------------------------- the invariant companion
+// A check that THROWS is only worth shipping if the records the plugin really writes pass
+// it. Registering the companion HERE means every mutation in the rest of this suite — every
+// plan write, project update and plugin record below — is also a live false-positive test.
+const InvariantRegistry = (await import('@deepseek-ai/dsh-invariants')).default
+const companion = await import('../lib/invariant.js')
+ctx.plugin(InvariantRegistry)
+for (let i = 0; i < 60 && ctx.invariants === undefined; i++) await new Promise((r) => setTimeout(r, 100))
+check('the invariants service is available on the harness context', ctx.invariants !== undefined, true)
+let companionActivated = false
+ctx.plugin({
+  name: companion.name,
+  inject: companion.inject,
+  apply: (c) => { companionActivated = true; return companion.apply(c) },
+})
+await new Promise((r) => setTimeout(r, 300))
+check('the companion registers its checks with the service', companionActivated, true)
+check('it owns the package name it reports failures under', companion.PACKAGE_NAME, 'dsh-daily-progress-tab')
+// The failure direction, at the same level: a stored day whose date disagrees with its key.
+check('a day record whose date disagrees with its key is REFUSED',
+  /must equal the date in its key/.test(companion.validateChange({
+    domain: 'daily_progress_tab', table: 'plans', key: 'default:2026-08-13', operation: 'put',
+    value: { date: '2026-08-12', items: [] },
+  })), true)
+
 // ---------------------------------------------------------------- request driver
 function call(method, path, body, host = '127.0.0.1:3080') {
   return new Promise((resolve, reject) => {

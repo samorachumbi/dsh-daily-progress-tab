@@ -453,9 +453,9 @@ with `Cannot read properties of undefined (reading 'prepare')`. Copy the package
 
 ```bash
 npm run typecheck   # tsc against the REAL @deepseek-ai types
-npm test            # 128 unit tests (scoring, ranking, monitoring, metrics, page structure, contrast, the scanner)
+npm test            # 135 unit tests (scoring, ranking, monitoring, metrics, page structure, contrast, the scanner, the invariants)
 npm run build       # tsc → lib/
-npm run probe       # 312 live probes: real cordis, real json backend, real tool registry
+npm run probe       # 316 live probes: real cordis, real json backend, real tool registry
 npm run render      # serve the page on a bare http server for pixel verification (see below)
 ```
 
@@ -594,7 +594,17 @@ with staleness flagging, a per-project backlog, a task-level Now pick, the 29 ag
 chips, bubble headings, the `timezone` / `publishOwner` / `leakScan` config fields,
 and the optional-`tools` registration.
 
-Known gap: no `src/invariant.ts` / `./invariant` export (the harness package convention).
+**`./invariant` companion** — the harness convention every package here follows: it registers this
+package's own runtime contracts with `@deepseek-ai/dsh-invariants`, so a divergence fails loudly and
+by name instead of being noticed a week later. The checks are loaded only where a profile enables that
+service, so the companion is inert where it is not wanted.
+
+What it owns is the **stored-record contract** — the one relationship here that can drift with nothing
+to notice: a day record's date must equal the date in its key (change one and reads serve the wrong
+day, silently), item ids must be unique and non-empty within a day (a duplicate routes every
+id-addressed operation onto the first item), and no **derived** field may be persisted (`checks`,
+`commands`, `blockers`, … are computed on every read, and zod strips unknown keys on reopen — the write
+looks perfect and the field is gone; census A13).
 
 ## Work with me
 
