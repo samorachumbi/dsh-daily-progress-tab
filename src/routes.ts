@@ -3,9 +3,11 @@
  * concerns (routing, body limits, the loopback guard, content types) and
  * delegates every semantic decision to the planner, which the agent tools share.
  *
- *   GET  /daily-progress-tab/ui     → the planner page
- *   GET  /daily-progress-tab/state  → Snapshot
- *   POST /daily-progress-tab/mutate → MutateResult
+ *   GET  /daily-progress-tab/ui            → the planner page
+ *   GET  /daily-progress-tab/state         → Snapshot
+ *   POST /daily-progress-tab/mutate        → MutateResult
+ *   GET  /daily-progress-tab/export/readme → the public résumé section (markdown)
+ *   GET  /daily-progress-tab/export/site   → the same records as a standalone page
  *
  * The page is served by this plugin, so it is same-origin with the API and can
  * live in its own browser tab (movable to a second screen) with no harness
@@ -21,6 +23,7 @@ import { isValidDateKey } from './calendar.ts'
 import { normalizeTz, type Planner } from './planner.ts'
 import type { MutateOp } from './types.ts'
 import { UI_HTML } from './ui.ts'
+import { renderExportBlock, renderSiteIndex } from './export.ts'
 
 /** Mount prefix owned by this plugin (distinct from upstream's `/daily-progress`). */
 export const ROUTE_PREFIX = '/daily-progress-tab'
@@ -104,6 +107,20 @@ export function createHandlers(planner: Planner, defaultDate: () => string): Dai
             return fail(res, 400, 'invalid_local_date', 'localDate must be a valid YYYY-MM-DD')
           }
           return sendJson(res, 200, await planner.snapshot(date, normalizeTz(url.searchParams.get('tz'))))
+        }
+        // The public résumé renders from the SAME snapshot the page and the tools read, so
+        // a number in public cannot disagree with the register it came from.
+        if (req.method === 'GET'
+          && (path === ROUTE_PREFIX + '/export/readme' || path === ROUTE_PREFIX + '/export/site')) {
+          const raw = url.searchParams.get('localDate')
+          const date = raw ?? defaultDate()
+          if (!isValidDateKey(date)) {
+            return fail(res, 400, 'invalid_local_date', 'localDate must be a valid YYYY-MM-DD')
+          }
+          const snapshot = await planner.snapshot(date, normalizeTz(url.searchParams.get('tz')))
+          return path === ROUTE_PREFIX + '/export/site'
+            ? send(res, 200, 'text/html; charset=utf-8', renderSiteIndex(snapshot.portfolio.entries))
+            : send(res, 200, 'text/markdown; charset=utf-8', renderExportBlock(snapshot.portfolio.entries))
         }
         if (req.method === 'POST' && path === ROUTE_PREFIX + '/mutate') {
           let body: unknown

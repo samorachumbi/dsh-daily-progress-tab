@@ -3,9 +3,11 @@
  * concerns (routing, body limits, the loopback guard, content types) and
  * delegates every semantic decision to the planner, which the agent tools share.
  *
- *   GET  /daily-progress-tab/ui     → the planner page
- *   GET  /daily-progress-tab/state  → Snapshot
- *   POST /daily-progress-tab/mutate → MutateResult
+ *   GET  /daily-progress-tab/ui            → the planner page
+ *   GET  /daily-progress-tab/state         → Snapshot
+ *   POST /daily-progress-tab/mutate        → MutateResult
+ *   GET  /daily-progress-tab/export/readme → the public résumé section (markdown)
+ *   GET  /daily-progress-tab/export/site   → the same records as a standalone page
  *
  * The page is served by this plugin, so it is same-origin with the API and can
  * live in its own browser tab (movable to a second screen) with no harness

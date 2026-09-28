@@ -311,7 +311,8 @@ toolCtx.plugin({
 await new Promise((r2) => setTimeout(r2, 500))
 
 check('plugin activates WITH a tools service', toolActivated, true)
-const expectedNames = ['daily_add_project', 'daily_add_task', 'daily_backlog_add', 'daily_backlog_plan', 'daily_backlog_remove', 'daily_checkin', 'daily_checkin_item', 'daily_edit_task', 'daily_live', 'daily_move_task', 'daily_now', 'daily_plan', 'daily_plan_project', 'daily_plugin', 'daily_plugin_remove', 'daily_plugins', 'daily_projects', 'daily_remove_task', 'daily_reorder_task', 'daily_select_project', 'daily_set_task_done', 'daily_spark', 'daily_spark_dismiss', 'daily_spark_promote', 'daily_sparks', 'daily_suggest', 'daily_update_project', 'daily_update_task']
+const expectedNames = ['daily_add_project', 'daily_add_task', 'daily_backlog_add', 'daily_backlog_plan', 'daily_backlog_remove', 'daily_checkin', 'daily_checkin_item', 'daily_edit_task', 'daily_export',
+  'daily_live', 'daily_move_task', 'daily_now', 'daily_plan', 'daily_plan_project', 'daily_plugin', 'daily_plugin_remove', 'daily_plugins', 'daily_projects', 'daily_remove_task', 'daily_reorder_task', 'daily_select_project', 'daily_set_task_done', 'daily_spark', 'daily_spark_dismiss', 'daily_spark_promote', 'daily_sparks', 'daily_suggest', 'daily_update_project', 'daily_update_task']
 check('all agent tools registered', [...toolDefs.keys()].sort(), expectedNames)
 
 const runTool = async (name, args) => {
@@ -580,6 +581,44 @@ folio = await runTool('daily_plugin_remove', { plugin: 'dsh-somebody-elses' })
 check('removing takes it out of the register', folio.plugins.length, 1)
 check('an unknown plugin is refused',
   await runTool('daily_plugin_remove', { plugin: 'ghost' }).then(() => 'no-error', (e) => String(e.message).split(':')[0]), 'plugin_not_found')
+
+// ---------------------------------------------------------------- the public export (tool)
+// The résumé is DERIVED from the register, so most of these checks are about what does NOT
+// appear: unpublished work, someone else's work, and the gate's own language.
+//
+// THIS BLOCK LIVES HERE ON PURPOSE: it needs the TOOLS store, which the probe removes a few
+// sections below (the bare-context check deletes its directory). A write after that point
+// fails with ENOENT rather than a useful message — which is how this was found.
+const { EXPORT_BEGIN, EXPORT_END } = await import('../lib/export.js')
+const resume = await runTool('daily_export', {})
+check('daily_export renders the block with both markers',
+  [resume.block.startsWith(EXPORT_BEGIN), resume.block.trimEnd().endsWith(EXPORT_END)], [true, true])
+check('the public block carries none of the gate\'s language',
+  [/publish-scan/.test(resume.block), /SCAN CLEAN/.test(resume.block), /probe-scan/.test(resume.block),
+    /TODO/.test(resume.block), /pass\b/.test(resume.block)], [false, false, false, false, false])
+check('with nothing public it says so instead of emitting an empty list',
+  [resume.published, /Nothing published yet\./.test(resume.block)], [0, true])
+
+// Record ONE known public plugin, then assert it appears — and that nothing ELSE does.
+await runTool('daily_plugin', {
+  name: 'dsh-demo', status: 'public', publicUrl: 'https://github.com/' + PROBE_OWNER + '/dsh-demo',
+})
+const named = await runTool('daily_export', {})
+check('a plugin that IS public and carries a URL is listed',
+  named.block.includes('[dsh-demo](https://github.com/' + PROBE_OWNER + '/dsh-demo)'), true)
+check('and the published count follows the list', named.published, 1)
+const others = (await runTool('daily_plugins', {})).plugins.filter((p) => p.name !== 'dsh-demo')
+check('and NO other plugin is listed', others.filter((p) => named.block.includes(p.name)).map((p) => p.name), [])
+
+const spliced = await runTool('daily_export', {
+  document: 'PROSE ABOVE\n' + EXPORT_BEGIN + '\nstale\n' + EXPORT_END + '\nPROSE BELOW\n',
+})
+check('a document with markers comes back spliced, prose intact',
+  [spliced.spliced.includes('PROSE ABOVE'), spliced.spliced.includes('PROSE BELOW'),
+    spliced.spliced.includes('stale'), spliced.spliceError], [true, true, false, ''])
+const refused = await runTool('daily_export', { document: 'a document with no markers at all' })
+check('a document without markers is REFUSED rather than appended to',
+  [refused.spliced, refused.spliceError.length > 0], ['', true])
 
 // The plugin must still boot when NO tool registry exists (optional dependency).
 const bareCtx = new Context()
@@ -1112,6 +1151,26 @@ check('an unknown plugin is refused',
   (await post({ localDate: PROJ_DATE, tz: TZ, op: 'removePlugin', payload: { plugin: 'never-heard-of-it' } })).parsed.code, 'plugin_not_found')
 check('an ambiguous match is refused',
   (await post({ localDate: PROJ_DATE, tz: TZ, op: 'removePlugin', payload: { plugin: 'dsh-' } })).parsed.code, 'invalid_payload')
+
+// ---------------------------------------------------------------- the public export (HTTP)
+// The same export over the wire, in the HTTP store. The two harnesses have separate json
+// backends BY DESIGN, so this half sets up its own public record rather than reusing the
+// tools one — a lesson this probe learned the hard way.
+await post({ localDate: PROJ_DATE, tz: TZ, op: 'updatePlugin', payload: {
+  plugin: 'dsh-cost-bubble', status: 'public', publicUrl: 'https://github.com/' + PROBE_OWNER + '/dsh-cost-bubble',
+} })
+const md = await get('/daily-progress-tab/export/readme?localDate=' + PROJ_DATE + '&tz=' + TZ)
+check('the export route serves markdown with the block', [md.status, md.raw.startsWith(EXPORT_BEGIN)], [200, true])
+check('and lists the record that is public in THIS store',
+  md.raw.includes('https://github.com/' + PROBE_OWNER + '/dsh-cost-bubble'), true)
+const routeRegister = (await get('/daily-progress-tab/state?localDate=' + PROJ_DATE + '&tz=' + TZ)).parsed.portfolio.entries
+check('and nothing that is not public in this store',
+  routeRegister.filter((e) => e.name !== 'dsh-cost-bubble' && md.raw.includes(e.name)).map((e) => e.name), [])
+const site = await get('/daily-progress-tab/export/site?localDate=' + PROJ_DATE + '&tz=' + TZ)
+check('the site index is a document, not the markdown',
+  [site.status, site.raw.startsWith('<!doctype html>'), site.raw.includes(EXPORT_BEGIN)], [200, true, false])
+check('a foreign Host cannot read the export either',
+  (await get('/daily-progress-tab/export/readme', 'evil.example')).status, 403)
 
 // ---------------------------------------------------------------- durability
 check('domain/changed emitted for durable writes', changes.length > 0, true)

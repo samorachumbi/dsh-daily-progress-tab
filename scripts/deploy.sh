@@ -98,7 +98,9 @@ if [ "$MODE" = rollback ]; then
   mkdir -p "$(dirname "$TARGET")"
   cp -a "$newest" "$TARGET"
   ok "restored $(tree_hash "$TARGET") (was deployed as $(basename "$newest"))"
-  echo "   restart to make it live: kill \$(cat $PLANNER_HOME/dsh-planner.pid) && DSH_HOME=$PLANNER_HOME setsid nohup node /usr/local/bin/dsh web --port $PORT >> $PLANNER_HOME/boot.log 2>&1 &"
+  echo "   restart to make it live: systemctl --user restart dsh-planner"
+  echo "   (the durable instance is a systemd user service since 2026-09-28 — a nohup-ed"
+  echo "    process died with the last reboot and left a stale pid file behind)"
   exit 0
 fi
 
@@ -192,9 +194,7 @@ cat <<EOF
    The code is deployed and verified. It is NOT live yet - a host-rendered page
    only changes after a restart, and the restart ends the session talking to it.
 
-     kill \$(cat $PLANNER_HOME/dsh-planner.pid)
-     DSH_HOME=$PLANNER_HOME setsid nohup node /usr/local/bin/dsh web --port $PORT >> $PLANNER_HOME/boot.log 2>&1 &
-     echo \$! > $PLANNER_HOME/dsh-planner.pid
+     systemctl --user restart dsh-planner     # the pid file is written from systemd
 
    Then:  curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:$PORT/daily-progress-tab/ui
 

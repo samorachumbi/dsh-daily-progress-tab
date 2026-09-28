@@ -14,6 +14,7 @@
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { EXPORT_BEGIN, EXPORT_END, exportCounts, renderExportBlock, spliceExport } from './export.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Planner } from './planner.ts'
 import type { DayPlan, MutateOp, PlanItem, PortfolioEntry, RankedProject, Snapshot, Spark } from './types.ts'
@@ -738,6 +739,60 @@ function renderPortfolioReport(value: PortfolioReport): string {
   return lines.join('\n')
 }
 
+/**
+ * The public résumé, as the model reads it.
+ *
+ * The block is the artefact; `spliced` is the convenience. The plugin WRITES NOTHING — the
+ * agent passes the document it read, gets the document back, and writes the file itself.
+ * That is the same division of labour as the publish gate: the plugin composes, the agent
+ * acts, the human decides.
+ */
+interface ResumeReport {
+  published: number
+  ready: number
+  block: string
+  spliced: string
+  spliceError: string
+}
+
+const resumeOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    published: { type: 'integer', required: true },
+    ready: { type: 'integer', required: true },
+    block: { type: 'string', required: true },
+    /** The document with the block spliced in, or '' when none was passed or the splice was refused. */
+    spliced: { type: 'string', required: true },
+    /** Why the splice was refused, or ''. */
+    spliceError: { type: 'string', required: true },
+  },
+} as const
+
+function renderResume(value: ResumeReport): string {
+  const lines = ['Public résumé section — ' + value.published + ' published, '
+    + value.ready + ' in the queue.', '', value.block, '']
+  if (value.spliceError !== '') {
+    lines.push('NOT spliced: ' + value.spliceError)
+    lines.push('Add these two lines around the list you want generated, then call again:')
+    lines.push('  ' + EXPORT_BEGIN)
+    lines.push('  ' + EXPORT_END)
+  } else if (value.spliced !== '') {
+    lines.push('Spliced above into the document you passed (' + value.spliced.length
+      + ' characters). Write it back to the file yourself — this plugin writes nothing.')
+  } else {
+    lines.push('Pass the current text of the target document as `document` and it comes back spliced.')
+  }
+  return lines.join('\n')
+}
+
+const RESUME_OUT = {
+  schema: resumeOutputSchema,
+  render: (_args: unknown, value: unknown) => [
+    { type: 'text' as const, text: renderResume(value as ResumeReport) },
+  ],
+} as const
+
 const PORTFOLIO_OUT = {
   schema: portfolioOutputSchema,
   render: (_args: unknown, value: unknown) => [
@@ -1341,6 +1396,35 @@ export function buildTools(deps: ToolDeps) {
       parameters: {},
       output: PORTFOLIO_OUT,
       execute: async () => portfolioReport(await planner.snapshot(today(), '')),
+    }),
+
+    defineTool({
+      name: 'daily_export',
+      description: 'Render the PUBLIC résumé section from this register: only plugins that are already public AND carry a URL, with counts derived from the same records the gate reads, and none of the gate\'s own language (no commands, no scan notes, no blockers, no dates). Nothing unpublished, internal or third-party can appear — a résumé that links to a repository that does not exist is worse than a short one. Pass `document` (the current text of the README you mean to update) and it comes back with the block spliced between its markers; the splice REFUSES rather than appending when the markers are missing. This tool writes nothing: it returns text, and you write the file.',
+      parameters: {
+        document: { type: 'string', description: 'Optional: the current text of the target document. When given, the result includes it with the generated block spliced between the marker pair.' },
+        date: { type: 'string', description: 'Local date to read the register as of, YYYY-MM-DD. Defaults to today in the configured timezone. The queue count moves with it, because a fact older than 30 days stops counting as current.' },
+      },
+      output: RESUME_OUT,
+      execute: async (args: { document?: string; date?: string }) => {
+        const snapshot = await planner.snapshot(args.date ?? today(), '')
+        const block = renderExportBlock(snapshot.portfolio.entries)
+        const counts = exportCounts(snapshot.portfolio.entries)
+        const document = args.document ?? ''
+        if (document === '') {
+          return { published: counts.published, ready: counts.ready, block, spliced: '', spliceError: '' }
+        }
+        const spliced = spliceExport(document, block)
+        return {
+          published: counts.published,
+          ready: counts.ready,
+          block,
+          spliced: spliced ?? '',
+          spliceError: spliced === null
+            ? 'the document has no marker pair: ' + EXPORT_BEGIN + ' … ' + EXPORT_END
+            : '',
+        }
+      },
     }),
 
     defineTool({

@@ -201,7 +201,7 @@ today, which is exactly when a private path or a token gets committed.
 
 ## Driving it by asking (agent tools)
 
-The plugin registers **28 tools**, so the plan, the board, the backlog and the feedback loop can all be managed
+The plugin registers **29 tools**, so the plan, the board, the backlog and the feedback loop can all be managed
 conversationally:
 
 | Tool | What it does |
@@ -278,6 +278,39 @@ stays with a human; the toil does not.
 LICENSE, upstream attribution, README, screenshot, git repository, and recency. A fork must record its
 upstream repository and commit, and an unverified fact counts as missing rather than true.
 
+### The public export
+
+The register is a private console: it carries the gate, the blockers and the exact shell to publish.
+**`daily_export` renders the part of it that belongs in public** — and refuses the rest by construction:
+
+| rule | why |
+|---|---|
+| only records that are `public` **and** carry a URL appear | a résumé that links to a repository that does not exist is worse than a short one, and this is what makes the published COUNT equal the list |
+| `internal` and `third-party` never appear | the gate refuses them; a résumé must not be the way around it |
+| no commands, no scan notes, no dates, no checklist | that is the console's language, and one of those strings is a private path |
+| a document without the marker pair is **refused**, not appended to | appending a generated block to a hand-written readme is how a document starts lying about itself |
+
+```bash
+curl -s 'http://127.0.0.1:3099/daily-progress-tab/export/readme' | head -8
+```
+
+The section lives between two markers in whatever document you keep it in:
+
+```
+<!-- dsh-portfolio:begin — generated, do not edit by hand -->
+#### Plugins
+…
+<!-- dsh-portfolio:end -->
+```
+
+`daily_export` takes the document's current TEXT and returns it spliced — it writes no files. The agent
+reads the file, calls the tool, writes the result; the plugin composes, the agent acts, the human
+decides. That is deliberate, and it is the same division of labour as the publish gate.
+
+**Verified against the real register, which is the point of deriving it:** with nothing published the
+export says *"Nothing published yet."* The number in public cannot disagree with the register, because
+it is the same number.
+
 ### Configuration
 
 | field | default | what it does |
@@ -337,6 +370,8 @@ The model authors the content; the plugin never calls a model itself.
 | `GET /daily-progress-tab/ui` | the planner page (also at the bare prefix) |
 | `GET /daily-progress-tab/state?localDate=YYYY-MM-DD&tz=IANA` | snapshot (includes `pending`, `live` and the derived `monitoring` per project) |
 | `POST /daily-progress-tab/mutate` | `{localDate, tz, op, payload}` |
+| `GET /daily-progress-tab/export/readme` | the public résumé section as markdown, generated from the register |
+| `GET /daily-progress-tab/export/site` | the same records as a standalone page (what a Pages site would serve) |
 
 Ops (17): `toggleItem` · `addItem` · `removeItem` · `editItemText` · `updateItem` · `setTomorrow` ·
 `clearToday` · `moveItem` · `splitItem` · `setSuggestions` · `applySuggestion` · `addProject` ·
@@ -555,7 +590,7 @@ harness and the two-theme rule.
 
 **Added:** the standalone planner tab (no client bundle, so nothing for `dsh-client-modules` to
 compose), the ranked projects board, the Working/Pending/Live columns, the check-in feedback loop
-with staleness flagging, a per-project backlog, a task-level Now pick, the 28 agent tools, suggestion
+with staleness flagging, a per-project backlog, a task-level Now pick, the 29 agent tools, suggestion
 chips, bubble headings, the `timezone` / `publishOwner` / `leakScan` config fields,
 and the optional-`tools` registration.
 
