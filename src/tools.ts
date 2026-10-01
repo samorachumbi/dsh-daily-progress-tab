@@ -17,6 +17,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { EXPORT_BEGIN, EXPORT_END, exportCounts, renderExportBlock, spliceExport } from './export.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Planner } from './planner.ts'
+import { buildNewItems } from './planner.ts'
 import type { DayPlan, MutateOp, PlanItem, PortfolioEntry, RankedProject, Snapshot, Spark } from './types.ts'
 
 /** One task as the model sees it. */
@@ -1251,7 +1252,7 @@ export function buildTools(deps: ToolDeps) {
 
     defineTool({
       name: 'daily_plan_project',
-      description: 'Break the selected project (or a named one) into daily tasks in one call. Each task gets a short summary box saying what it implements, and is linked to the project so the planner can show the project\'s work as its own column. Defaults to today.',
+      description: 'Break the selected project (or a named one) into daily tasks in one call. Each task gets a short summary box (max 500 chars) saying what it implements, and is linked to the project so the planner can show the project\'s work as its own column. Defaults to today. ALL tasks are validated before ANY is written: if one is invalid nothing is created, and the error names which task and why.',
       parameters: {
         ...PROJECT_REF_PARAMS,
         tasks: {
@@ -1263,7 +1264,7 @@ export function buildTools(deps: ToolDeps) {
             additionalProperties: false,
             properties: {
               text: { type: 'string', required: true, description: 'The task, a short imperative line.' },
-              summary: { type: 'string', description: 'What this task implements — shown in the task\'s summary box.' },
+              summary: { type: 'string', description: 'What this task implements — shown in the task\'s summary box. Max 500 characters.' },
               target: { type: 'string', enum: ['today', 'tomorrow'], description: 'Which day. Defaults to today.' },
             },
           },
@@ -1295,14 +1296,36 @@ export function buildTools(deps: ToolDeps) {
             projectId = hits[0]!.id
           }
         }
-        let view: PlanView | null = null
+        // Group by the day each task lands on, then validate EVERY group before
+        // writing ANY of them. The previous version looped `addItem` and threw on
+        // the first bad task, so a seven-task call whose sixth summary was too
+        // long stored five tasks and reported an error - the caller saw a
+        // failure and a half-written day (bug-census A14).
+        const groups: { target: 'today' | 'tomorrow'; entries: unknown[] }[] = [
+          { target: 'today', entries: [] },
+          { target: 'tomorrow', entries: [] },
+        ]
         for (const entry of tasks) {
           if (typeof entry !== 'object' || entry === null) throw new Error('invalid_payload: every task must be an object')
-          const task = entry as { text?: unknown; summary?: unknown; target?: unknown }
-          const result = await planner.apply('addItem', date, '', {
-            target: task.target === 'tomorrow' ? 'tomorrow' : 'today',
-            text: task.text,
-            summary: task.summary,
+          const task = entry as { target?: unknown }
+          groups[task.target === 'tomorrow' ? 1 : 0]!.entries.push(entry)
+        }
+        for (const group of groups) {
+          if (group.entries.length === 0) continue
+          const day = group.target === 'today' ? snapshot0.today : snapshot0.tomorrow
+          const check = buildNewItems(
+            group.entries,
+            day?.items.length ?? 0,
+            group.target === 'tomorrow' ? 'tomorrow-write' : 'today',
+          )
+          if (!check.ok) throw new Error(check.code + ': ' + check.message)
+        }
+        let view: PlanView | null = null
+        for (const group of groups) {
+          if (group.entries.length === 0) continue
+          const result = await planner.apply('addItems', date, '', {
+            target: group.target,
+            items: group.entries,
             projectId,
           })
           if (!result.ok) throw new Error(result.code + ': ' + result.message)
@@ -1320,7 +1343,7 @@ export function buildTools(deps: ToolDeps) {
         task: TASK_MATCH_PARAM,
         target: TARGET_PARAM,
         newText: { type: 'string', description: 'Replacement task text.' },
-        summary: { type: 'string', description: 'What this task implements — its summary box.' },
+        summary: { type: 'string', description: 'What this task implements — its summary box. Max 500 characters.' },
         projectId: PROJECT_LINK_PARAM,
       },
       output: { schema: planOutputSchema, render: renderOut },

@@ -473,7 +473,13 @@ export interface MutateRequest {
     op: MutateOp;
     payload: Record<string, unknown>;
 }
-export type MutateOp = 'toggleItem' | 'logCheckin' | 'checkinItem' | 'addItem' | 'removeItem' | 'editItemText' | 'setTomorrow' | 'clearToday'
+export type MutateOp = 'toggleItem' | 'logCheckin' | 'checkinItem' | 'addItem'
+/**
+ * Add MANY items to one day in a SINGLE write. Exists because a loop of
+ * `addItem` calls is not atomic: a validation error part-way through left the
+ * earlier tasks stored and the rest missing (bug-census A14).
+ */
+ | 'addItems' | 'removeItem' | 'editItemText' | 'setTomorrow' | 'clearToday'
 /** Move one item to another date (the `defer` suggestion). */
  | 'moveItem'
 /** Choose — or with a null itemId clear — the one task being worked on now. */

@@ -521,6 +521,12 @@ export type MutateOp =
   | 'logCheckin'
   | 'checkinItem'
   | 'addItem'
+  /**
+   * Add MANY items to one day in a SINGLE write. Exists because a loop of
+   * `addItem` calls is not atomic: a validation error part-way through left the
+   * earlier tasks stored and the rest missing (bug-census A14).
+   */
+  | 'addItems'
   | 'removeItem'
   | 'editItemText'
   | 'setTomorrow'

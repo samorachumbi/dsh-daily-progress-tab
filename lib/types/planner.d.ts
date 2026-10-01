@@ -14,7 +14,7 @@
 import type { Domain } from '@deepseek-ai/dsh-storage-domain';
 import type { DailyProgressDomainSpec } from './domain.ts';
 import type { PublishSettings } from './portfolio.ts';
-import type { MutateOp, MutateResult, Snapshot } from './types.ts';
+import type { ItemOrigin, MutateErrorCode, MutateOp, MutateResult, PlanItem, Snapshot } from './types.ts';
 export declare const MAX_ITEMS = 50;
 export declare const MAX_TEXT = 500;
 export declare const MAX_TZ = 64;
@@ -35,7 +35,28 @@ export interface Planner {
     /** Apply one mutation to one user-local date. */
     apply(op: MutateOp, date: string, tz: string, payload: Record<string, unknown>): Promise<MutateResult>;
 }
+type Failed = {
+    ok: false;
+    code: MutateErrorCode;
+    message: string;
+};
 /** A bounded, non-empty zone label; recorded for display only. */
 export declare function normalizeTz(value: unknown): string;
 export declare function normalizeText(value: unknown): string | null;
+/**
+ * Validate a batch of new tasks and build their records, WITHOUT writing
+ * anything.
+ *
+ * Exported so a caller adding to more than one day can reject every group
+ * before the first write lands. Validating inside the write loop is exactly how
+ * a half-written batch shipped: seven tasks were requested, the sixth had an
+ * over-long summary, and five were already stored by the time the error
+ * surfaced (2026-10-01, bug-census A14). One write per call plus this check up
+ * front makes that impossible rather than merely unlikely.
+ */
+export declare function buildNewItems(rawItems: unknown, existingCount: number, origin: ItemOrigin): {
+    ok: true;
+    items: PlanItem[];
+} | Failed;
 export declare function createPlanner(domainPromise: Promise<Domain<DailyProgressDomainSpec>>, publish?: PublishSettings): Planner;
+export {};
