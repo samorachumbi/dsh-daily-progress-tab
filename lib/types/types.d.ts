@@ -93,6 +93,8 @@ export interface PlanItem {
     projectId?: string;
     /** One line on what this task actually implements — its summary box. */
     summary?: string;
+    /** Estimated work in hours. Absent means unestimated — never treated as zero. */
+    estHours?: number;
     /** Model-authored chips; absent on records written before this field existed. */
     suggestions?: TaskSuggestion[];
 }
@@ -149,6 +151,10 @@ export interface Snapshot {
      * with the derived count and the per-plugin publish gate.
      */
     portfolio: Portfolio;
+    /** Build time: the day's estimated load against the budget, and the measured capacity. */
+    build: BuildSummary;
+    /** The effective daily budget in hours, as stored or defaulted. */
+    budgetHours: number;
 }
 /** Which day a mutation addresses. */
 export type PlanTarget = 'today' | 'tomorrow';
@@ -166,6 +172,19 @@ export type ProjectStatus = 'idea' | 'active' | 'parked' | 'shipped' | 'killed';
  * the FIRST dollar drive it, effort divides it (WSJF), and the rubric records
  * which dimension is the real risk.
  */
+/**
+ * One revision of a project's effort estimate. The estimate is FLUID by design —
+ * it is re-stated once the project is being worked on — so the trail is what
+ * makes fluidity safe rather than a loophole.
+ */
+export interface EffortRevision {
+    at: string;
+    from: number | null;
+    to: number | null;
+    unit?: 'build-day';
+    /** WHY it moved. Required in spirit whenever the revision is upward after an overrun. */
+    note?: string;
+}
 export interface Project {
     id: string;
     name: string;
@@ -177,6 +196,18 @@ export interface Project {
     ttfdDays: number | null;
     /** Build effort in days. null = not estimated yet. */
     effortDays: number | null;
+    /**
+     * How `effortDays` was measured. Absent means UNSTATED, which is the safe
+     * default: an estimate made before the build-day unit existed is a count of
+     * work-chunks, and burn withholds its ratio rather than dividing it into hours.
+     */
+    effortUnit?: 'build-day';
+    /**
+     * Every time the estimate was revised, oldest first. A fluid estimate without
+     * a trail is unfalsifiable; with one, "we revised this up four times" becomes a
+     * finding about how well we estimate — the calibration this machine lacks.
+     */
+    effortRevisions?: EffortRevision[];
     /** Expected revenue per month once running, in `currency`. null = not estimated yet. */
     revenuePerMonth: number | null;
     currency: string;
@@ -451,6 +482,8 @@ export interface Portfolio {
 }
 export interface RankedProject extends Project {
     score: ProjectScore;
+    /** Build burn against `effortDays`; see {@link ProjectBurn}. */
+    build: ProjectBurn;
     /**
      * Derived, never stored: true when the project is not started or is on hold
      * (status `idea` or `parked`). Drives the Pending column, so the rule lives in
@@ -463,6 +496,57 @@ export interface RankedProject extends Project {
     monitoring: Monitoring;
     /** Derived from the sparks this project's feedback produced; see summarizeSparks. */
     sparkSummary: ProjectSparks;
+}
+/**
+ * Measured capacity over a trailing window: what actually got finished, in
+ * estimated hours, per day. This is the number the daily budget should be set
+ * FROM rather than guessed at — the budget is an assumption until this exists.
+ */
+export interface CapacityReading {
+    /** Trailing window in days. */
+    days: number;
+    /** Days in the window on which at least one estimated task was completed. */
+    samples: number;
+    /** Mean completed hours per SAMPLED day; null when there are no samples. */
+    avgHours: number | null;
+    /** `avgHours / budgetHours`; null when unmeasurable. Above 1 means the budget under-states real capacity. */
+    ratio: number | null;
+}
+/** One project's build burn: what it has cost against what it was estimated at. */
+export interface ProjectBurn {
+    /** Build-days consumed = completed estimated hours / budget. */
+    consumedDays: number;
+    /** The stored `effortDays`, or null when never estimated. */
+    estimatedDays: number | null;
+    /** `consumedDays / estimatedDays`; null when either side is missing. */
+    ratio: number | null;
+    /** Completed tasks carrying NO estimate. The burn under-reports by this much — surfaced, never hidden. */
+    unestimatedDone: number;
+    /** True when `ratio` is at or past OVERRUN_STOP_RATIO: stop and re-estimate before continuing. */
+    overrun: boolean;
+    /**
+     * WHY there is no `ratio`, when there is none — so the page can say "this
+     * estimate predates the build-day unit" rather than showing a percentage it
+     * cannot support, or firing a false overrun.
+     */
+    ratioBlockedBy?: 'pre-unit' | 'no-estimate' | 'no-consumption';
+    /** How many times the estimate has been revised. A high count is a finding about how we estimate. */
+    revisions: number;
+}
+/** The build-time summary the page renders beside the day's plan. */
+export interface BuildSummary {
+    /** Hours estimated across the target day's items (all of them, done or not). */
+    plannedHours: number;
+    /** Hours estimated across the target day's items that are DONE. */
+    doneHours: number;
+    /** Items on the target day carrying no estimate. */
+    unestimated: number;
+    /** The effective daily budget in hours. */
+    budgetHours: number;
+    /** `plannedHours / budgetHours`; null when the budget is unusable. */
+    load: number | null;
+    /** The measured trailing capacity, which is what the budget should be set from. */
+    capacity: CapacityReading;
 }
 /** Mutation request body. */
 export interface MutateRequest {
@@ -493,7 +577,9 @@ export type MutateOp = 'toggleItem' | 'logCheckin' | 'checkinItem' | 'addItem'
 /** Apply one suggestion chip by id. */
  | 'applySuggestion'
 /** Patch one item's text, summary box or project link. */
- | 'updateItem' | 'addProject' | 'updateProject' | 'removeProject'
+ | 'updateItem'
+/** Set the daily build budget in hours — one build-day is this many hours. */
+ | 'setBudget' | 'addProject' | 'updateProject' | 'removeProject'
 /** Choose the project being executed. */
  | 'selectProject'
 /** Add a candidate task to a project's backlog (undated). */

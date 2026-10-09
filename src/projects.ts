@@ -23,7 +23,9 @@
  */
 
 import { RUBRIC_DIMENSIONS } from './types.ts'
-import type { Checkin, CheckinItem, Monitoring, Project, ProjectRubric, ProjectScore, ProjectSparks, ProjectStatus, RankedProject, RubricDimension, Spark, SparkBoard } from './types.ts'
+import type { Checkin, CheckinItem, DayPlan, Monitoring, Project, ProjectRubric, ProjectScore, ProjectSparks, ProjectStatus, RankedProject, RubricDimension, Spark, SparkBoard } from './types.ts'
+import { summarizeBurn } from './build.ts'
+import { DEFAULT_BUDGET_HOURS, MAX_EFFORT_REVISIONS } from './budget.ts'
 
 export const MAX_TTFD_DAYS = 3650
 export const MAX_EFFORT_DAYS = 3650
@@ -253,11 +255,16 @@ export function rankProjects(
   checkins: readonly Checkin[] = [],
   today = '',
   sparks: readonly Spark[] = [],
+  /** Every day plan, so burn measures what was actually FINISHED rather than what was intended. */
+  plans: readonly DayPlan[] = [],
+  /** The effective daily build budget in hours — one build-day is this many hours. */
+  budgetHours: number = DEFAULT_BUDGET_HOURS,
 ): RankedProject[] {
   return projects
     .map((project) => ({
       ...project,
       score: scoreProject(project),
+      build: summarizeBurn(project, plans, budgetHours),
       pending: isPending(project),
       live: isLive(project),
       monitoring: summarizeMonitoring(project, checkins.filter((entry) => entry.projectId === project.id), today),
@@ -346,6 +353,33 @@ export function normalizeProject(
   const effortDays = has('effortDays') ? numberOrNull(raw.effortDays, 0.5, MAX_EFFORT_DAYS, 'effortDays') : { ok: true as const, value: prior?.effortDays ?? null }
   if (!effortDays.ok) return effortDays
   const revenuePerMonth = has('revenuePerMonth') ? numberOrNull(raw.revenuePerMonth, 0, 1e12, 'revenuePerMonth') : { ok: true as const, value: prior?.revenuePerMonth ?? null }
+  // The unit the effort estimate was made in. Absent is the SAFE state — it
+  // means unstated, and burn withholds its ratio rather than dividing hours by a
+  // chunk-count. `null` clears it, which is how an estimate is marked unrated.
+  let effortUnit: 'build-day' | undefined = prior?.effortUnit
+  if (has('effortUnit')) {
+    const value = raw.effortUnit
+    if (value === null || value === '') effortUnit = undefined
+    else if (value !== 'build-day') return { ok: false, message: "effortUnit must be 'build-day' or null" }
+    else effortUnit = 'build-day'
+  }
+  // The estimate is FLUID: revised once a project is actually being worked on,
+  // because the first number is a guess and a week of sized tasks replaces it.
+  // The trail is the guard — raising an estimate whenever it is exceeded is the
+  // one move that would make every overrun flag meaningless.
+  const effortNote = has('effortNote') ? text(raw.effortNote, 300, 'effortNote', false) : { ok: true as const, value: null }
+  if (!effortNote.ok) return effortNote
+  const revisions = [...(prior?.effortRevisions ?? [])]
+  if (prior !== undefined && (effortDays.value !== (prior.effortDays ?? null) || effortUnit !== prior.effortUnit)) {
+    revisions.push({
+      at: options.nowIso,
+      from: prior.effortDays ?? null,
+      to: effortDays.value ?? null,
+      ...(effortUnit === undefined ? {} : { unit: effortUnit }),
+      ...(effortNote.value === null ? {} : { note: effortNote.value }),
+    })
+    while (revisions.length > MAX_EFFORT_REVISIONS) revisions.shift()
+  }
   if (!revenuePerMonth.ok) return revenuePerMonth
 
   const currency = has('currency') ? text(raw.currency, 8, 'currency', true) : { ok: true as const, value: prior?.currency ?? 'KSh' }
@@ -380,6 +414,8 @@ export function normalizeProject(
       ...(summary.value === null ? {} : { summary: summary.value }),
       ttfdDays: ttfdDays.value,
       effortDays: effortDays.value,
+      ...(effortUnit === undefined ? {} : { effortUnit }),
+      ...(revisions.length === 0 ? {} : { effortRevisions: revisions }),
       revenuePerMonth: revenuePerMonth.value,
       currency: currency.value as string,
       confidence,

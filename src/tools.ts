@@ -19,6 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Planner } from './planner.ts'
 import { buildNewItems } from './planner.ts'
 import type { DayPlan, MutateOp, PlanItem, PortfolioEntry, RankedProject, Snapshot, Spark } from './types.ts'
+import { CAPACITY_WINDOW_DAYS, HOURS_PER_BUILD_DAY, OVERRUN_STOP_RATIO } from './budget.ts'
 
 /** One task as the model sees it. */
 interface TaskView {
@@ -31,6 +32,11 @@ interface TaskView {
   /** Owning project id, empty string when the task is not project work. */
   projectId: string
   suggestions: Array<{ id: string; label: string; action: string }>
+  /**
+   * Estimated hours. ABSENT when unestimated — deliberately not 0, which would
+   * read as "this task is free" and make a plan look like it fits.
+   */
+  estHours?: number
 }
 
 /** A task the operator could pick, on a day other than today. */
@@ -53,6 +59,16 @@ interface BacklogView {
 }
 
 interface PlanView {
+  /** The daily build budget in hours — one build-day is this many hours. */
+  budgetHours: number
+  /** Hours estimated across today's items. */
+  plannedHours: number
+  /** Today's items carrying no estimate. */
+  unestimated: number
+  /** Days in the trailing window that finished any estimated work. */
+  capacitySamples: number
+  /** Measured mean completed hours per sampled day; ABSENT when unmeasured, never 0. */
+  capacityHours?: number
   date: string
   streak: number
   /** Week completion 0-100, or -1 when the week has no items yet. */
@@ -87,6 +103,8 @@ const taskOutputSchema = {
     origin: { type: 'string', required: true },
     summary: { type: 'string', required: true },
     projectId: { type: 'string', required: true },
+    /** Absent when unestimated. */
+    estHours: { type: 'number' },
     suggestions: { type: 'array', required: true, items: suggestionOutputSchema },
   },
 } as const
@@ -125,6 +143,60 @@ const nowOutputSchema = {
   },
 } as const
 
+/** What `daily_capacity` answers: the budget, and what the work actually measured. */
+interface CapacityView {
+  budgetHours: number
+  hoursPerBuildDay: number
+  windowDays: number
+  samples: number
+  measured: boolean
+  plannedToday: number
+  doneToday: number
+  unestimatedToday: number
+  overrunStopRatio: number
+  note: string
+  avgHours?: number
+  ratio?: number
+  load?: number
+}
+
+const capacityOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    budgetHours: { type: 'number', required: true },
+    hoursPerBuildDay: { type: 'number', required: true },
+    windowDays: { type: 'integer', required: true },
+    samples: { type: 'integer', required: true },
+    measured: { type: 'boolean', required: true },
+    plannedToday: { type: 'number', required: true },
+    doneToday: { type: 'number', required: true },
+    unestimatedToday: { type: 'integer', required: true },
+    overrunStopRatio: { type: 'number', required: true },
+    note: { type: 'string', required: true },
+    /** Absent, never 0, when there is not yet a measurement. */
+    avgHours: { type: 'number' },
+    ratio: { type: 'number' },
+    load: { type: 'number' },
+  },
+} as const
+
+function renderCapacity(value: CapacityView): string {
+  const lines: string[] = []
+  lines.push('Build budget: ' + value.budgetHours + 'h/day  (one build-day = ' + value.hoursPerBuildDay + 'h)')
+  lines.push('Measured capacity, trailing ' + value.windowDays + ' days: '
+    + (value.avgHours === undefined
+      ? 'NOT MEASURED — ' + value.samples + ' day(s) finished any estimated work'
+      : value.avgHours + 'h/day over ' + value.samples + ' sampled day(s)'
+        + (value.ratio === undefined ? '' : '  (' + value.ratio + 'x the budget)')))
+  lines.push('Today: ' + value.plannedToday + 'h planned, ' + value.doneToday + 'h done'
+    + (value.load === undefined ? '' : ', load ' + value.load + 'x budget')
+    + (value.unestimatedToday > 0 ? ', ' + value.unestimatedToday + ' task(s) unestimated' : ''))
+  lines.push('')
+  lines.push(value.note)
+  return lines.join('\n')
+}
+
 const planOutputSchema = {
   type: 'object',
   additionalProperties: false,
@@ -132,6 +204,12 @@ const planOutputSchema = {
     date: { type: 'string', required: true },
     streak: { type: 'integer', required: true },
     weekPercent: { type: 'integer', required: true },
+    budgetHours: { type: 'number', required: true },
+    plannedHours: { type: 'number', required: true },
+    unestimated: { type: 'integer', required: true },
+    capacitySamples: { type: 'integer', required: true },
+    /** Absent when there is not yet a measurement. */
+    capacityHours: { type: 'number' },
     /** Null when nothing is picked. */
     now: { required: true, oneOf: [nowOutputSchema, { type: 'null' }] },
     today: { type: 'array', required: true, items: taskOutputSchema },
@@ -150,6 +228,7 @@ function taskView(item: PlanItem): TaskView {
     summary: item.summary ?? '',
     projectId: item.projectId ?? '',
     suggestions: (item.suggestions ?? []).map((s) => ({ id: s.id, label: s.label, action: s.action })),
+    ...(item.estHours === undefined ? {} : { estHours: item.estHours }),
   }
 }
 
@@ -158,6 +237,13 @@ function planView(date: string, snapshot: Snapshot): PlanView {
   return {
     date,
     streak: snapshot.streak,
+    // Build time travels with the plan, so the model sees the same load the
+    // operator does and cannot plan a day that does not fit.
+    budgetHours: snapshot.budgetHours,
+    plannedHours: snapshot.build.plannedHours,
+    unestimated: snapshot.build.unestimated,
+    capacitySamples: snapshot.build.capacity.samples,
+    ...(snapshot.build.capacity.avgHours === null ? {} : { capacityHours: snapshot.build.capacity.avgHours }),
     weekPercent: snapshot.weekRate === null ? -1 : Math.round(snapshot.weekRate * 100),
     now: snapshot.now === null ? null : {
       id: snapshot.now.item.id,
@@ -191,6 +277,14 @@ function renderPlan(value: PlanView): string {
   lines.push('', 'Now: ' + (value.now === null
     ? '(nothing picked)'
     : value.now.text + '  [' + value.now.id + ']'))
+  // The build budget, stated before the list: a day that does not fit should be
+  // visible on arrival rather than discovered at the end of it.
+  lines.push('', 'Build: ' + value.plannedHours + 'h planned of ' + value.budgetHours + 'h budget'
+    + (value.unestimated > 0 ? ' (' + value.unestimated + ' task(s) unestimated — load is a lower bound)' : '')
+    + ' | capacity '
+    + (value.capacityHours === undefined
+      ? 'not measured yet (' + value.capacitySamples + ' day(s) with finished estimated work)'
+      : value.capacityHours + 'h/day measured over ' + value.capacitySamples + ' day(s)'))
   const section = (title: string, rows: TaskView[]): void => {
     lines.push('', title + ':')
     if (rows.length === 0) {
@@ -202,7 +296,8 @@ function renderPlan(value: PlanView): string {
         ? '  {' + row.suggestions.map((s) => s.label).join(' | ') + '}'
         : ''
       lines.push('  [' + (row.done ? 'x' : ' ') + '] ' + row.text
-        + (row.origin === 'carried' ? ' (carried)' : '') + chips)
+        + (row.origin === 'carried' ? ' (carried)' : '')
+        + (row.estHours === undefined ? '  [?h]' : '  [' + row.estHours + 'h]') + chips)
     }
   }
   section('Today', value.today)
@@ -949,11 +1044,19 @@ export function buildTools(deps: ToolDeps) {
       parameters: {
         text: { type: 'string', required: true, description: 'The task, a short imperative line, 1-500 characters.' },
         target: TARGET_PARAM,
+        estHours: { type: 'number', description: 'Estimated work in hours. Omit for unestimated, which is reported as such rather than counted as free.' },
       },
       output: { schema: planOutputSchema, render: renderOut },
-      execute: async (args: { text: string; target?: 'today' | 'tomorrow' }) => {
+      execute: async (args: { text: string; target?: 'today' | 'tomorrow'; estHours?: number }) => {
         const date = today()
-        return unwrap(await planner.apply('addItem', date, '', { target: args.target ?? 'today', text: args.text }), date)
+        return unwrap(
+          await planner.apply('addItem', date, '', {
+            target: args.target ?? 'today',
+            text: args.text,
+            estHours: args.estHours,
+          }),
+          date,
+        )
       },
     }),
 
@@ -1192,7 +1295,14 @@ export function buildTools(deps: ToolDeps) {
         fulfills: { type: 'string', required: true, description: 'One sentence: who it serves and what need it fulfils.' },
         summary: { type: 'string', description: 'What "done" looks like and what it unblocks.' },
         ttfdDays: { type: 'integer', description: 'Estimated days from starting to the FIRST dollar.' },
-        effortDays: { type: 'number', description: 'Estimated build effort in days.' },
+        effortDays: { type: 'number', description: 'Estimated build effort in BUILD-DAYS — one build-day is the daily budget in hours (default 5).' },
+        effortUnit: {
+          required: true,
+          oneOf: [
+            { type: 'string', enum: ['build-day'], description: 'Mark this estimate as measured in build-days.' },
+            { type: 'null', description: 'Mark the estimate as UNSTATED (pre-unit); burn will withhold its ratio.' },
+          ],
+        },
         revenuePerMonth: { type: 'number', description: 'Expected revenue per month once running.' },
         currency: { type: 'string', description: 'Currency label, e.g. KSh. Defaults to KSh.' },
         confidence: { type: 'number', description: '0-1 confidence in the revenue estimate. Defaults to 0.5.' },
@@ -1219,7 +1329,15 @@ export function buildTools(deps: ToolDeps) {
         fulfills: { type: 'string', description: 'New one-sentence purpose.' },
         summary: { type: 'string', description: 'New summary.' },
         ttfdDays: { type: 'integer', description: 'Days to the first dollar.' },
-        effortDays: { type: 'number', description: 'Build effort in days.' },
+        effortDays: { type: 'number', description: 'Build effort in BUILD-DAYS — one build-day is the daily budget in hours (default 5).' },
+        effortNote: { type: 'string', description: 'WHY the estimate moved. Recorded on the revision trail — a fluid estimate without a reason is a rubber stamp.' },
+        effortUnit: {
+          required: true,
+          oneOf: [
+            { type: 'string', enum: ['build-day'], description: 'Mark this estimate as measured in build-days, which is what lets burn compute a ratio.' },
+            { type: 'null', description: 'Mark the estimate as UNSTATED (pre-unit). Burn then withholds its ratio rather than dividing hours by an unknown unit.' },
+          ],
+        },
         revenuePerMonth: { type: 'number', description: 'Expected revenue per month.' },
         currency: { type: 'string', description: 'Currency label.' },
         confidence: { type: 'number', description: '0-1 confidence.' },
@@ -1265,6 +1383,7 @@ export function buildTools(deps: ToolDeps) {
             properties: {
               text: { type: 'string', required: true, description: 'The task, a short imperative line.' },
               summary: { type: 'string', description: 'What this task implements — shown in the task\'s summary box. Max 500 characters.' },
+              estHours: { type: 'number', description: 'Estimated work in hours (0.25-24). Give every task one: an unestimated task cannot be planned against a budget.' },
               target: { type: 'string', enum: ['today', 'tomorrow'], description: 'Which day. Defaults to today.' },
             },
           },
@@ -1345,9 +1464,16 @@ export function buildTools(deps: ToolDeps) {
         newText: { type: 'string', description: 'Replacement task text.' },
         summary: { type: 'string', description: 'What this task implements — its summary box. Max 500 characters.' },
         projectId: PROJECT_LINK_PARAM,
+        estHours: {
+          required: true,
+          oneOf: [
+            { type: 'number', description: 'Estimated work in hours (0.25-24).' },
+            { type: 'null', description: 'Clear the estimate.' },
+          ],
+        },
       },
       output: { schema: planOutputSchema, render: renderOut },
-      execute: async (args: { itemId?: string; task?: string; target?: 'today' | 'tomorrow'; newText?: string; summary?: string; projectId?: string | null }) => {
+      execute: async (args: { itemId?: string; task?: string; target?: 'today' | 'tomorrow'; newText?: string; summary?: string; projectId?: string | null; estHours?: number | null }) => {
         const date = today()
         return unwrap(await applyItemOp('updateItem', {
           target: args.target,
@@ -1356,7 +1482,52 @@ export function buildTools(deps: ToolDeps) {
           text: args.newText,
           summary: args.summary,
           projectId: args.projectId,
+          estHours: args.estHours,
         }, date), date)
+      },
+    }),
+
+    defineTool({
+      name: 'daily_capacity',
+      description: 'Read the MEASURED build capacity — the estimated hours actually FINISHED per working day over the last 7 days — and optionally set the daily budget it is compared against. ONE BUILD-DAY IS THE BUDGET IN HOURS, so this also defines what a project\'s `effortDays` means. Set the budget from the READING, never from a guess: an assumed capacity makes every project\'s burn ratio noise, and noisy feedback gets ignored. Only days that finished estimated work are sampled, so a day off does not read as a collapse.',
+      parameters: {
+        hours: { type: 'number', description: 'Set the daily build budget in hours (0.5-24). Omit to read only.' },
+      },
+      output: {
+        schema: capacityOutputSchema,
+        render: (_args: unknown, value: unknown) => [
+          { type: 'text' as const, text: renderCapacity(value as CapacityView) },
+        ],
+      },
+      execute: async (args: { hours?: number }): Promise<CapacityView> => {
+        const date = today()
+        const result = args.hours === undefined
+          ? await planner.snapshot(date, '').then((snapshot) => ({ ok: true as const, snapshot }))
+          : await planner.apply('setBudget', date, '', { hours: args.hours })
+        if (!result.ok) throw new Error(result.code + ': ' + result.message)
+        const { snapshot } = result
+        const capacity = snapshot.build.capacity
+        const measured = capacity.samples > 0
+        return {
+          budgetHours: snapshot.budgetHours,
+          hoursPerBuildDay: HOURS_PER_BUILD_DAY,
+          windowDays: capacity.days,
+          samples: capacity.samples,
+          measured,
+          plannedToday: snapshot.build.plannedHours,
+          doneToday: snapshot.build.doneHours,
+          unestimatedToday: snapshot.build.unestimated,
+          overrunStopRatio: OVERRUN_STOP_RATIO,
+          note: measured
+            ? 'Set the budget from this reading with daily_capacity({hours}). A project at or past '
+              + OVERRUN_STOP_RATIO + 'x its effortDays is flagged overrun: stop and re-estimate before continuing.'
+            : 'No measurement yet: capacity averages only days that FINISHED estimated work, so it needs '
+              + 'tasks that carry an estimate to exist at all. Put estHours on the tasks you plan, work a '
+              + 'few days, and read this again before fixing the budget.',
+          ...(capacity.avgHours === null ? {} : { avgHours: capacity.avgHours }),
+          ...(capacity.ratio === null ? {} : { ratio: capacity.ratio }),
+          ...(snapshot.build.load === null ? {} : { load: snapshot.build.load }),
+        }
       },
     }),
 

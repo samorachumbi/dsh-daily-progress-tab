@@ -23,6 +23,7 @@
  * @module dsh-daily-progress-tab/domain
  */
 import z from 'zod';
+export { CAPACITY_WINDOW_DAYS, DEFAULT_BUDGET_HOURS, HOURS_PER_BUILD_DAY, MAX_BUDGET_HOURS, MAX_TASK_HOURS, MIN_BUDGET_HOURS, MIN_TASK_HOURS, OVERRUN_STOP_RATIO, } from './budget.ts';
 /** Chips per item. Keeps a task row readable and bounds what one suggest call writes. */
 export declare const MAX_SUGGESTIONS = 6;
 /** Hurdles/corrections tracked per check-in. Bounded so one record stays readable. */
@@ -38,6 +39,7 @@ export declare const dailyProgressDomain: {
             selectedProjectId: z.ZodNullable<z.ZodString>;
             selectedItemId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
             selectedItemDate: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+            budgetHours: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
             updatedAt: z.ZodString;
         }, z.core.$strip>;
         initial: {
@@ -64,6 +66,7 @@ export declare const dailyProgressDomain: {
                     }>;
                     projectId: z.ZodOptional<z.ZodString>;
                     summary: z.ZodOptional<z.ZodString>;
+                    estHours: z.ZodOptional<z.ZodNumber>;
                     suggestions: z.ZodOptional<z.ZodArray<z.ZodObject<{
                         id: z.ZodString;
                         label: z.ZodString;
@@ -92,6 +95,18 @@ export declare const dailyProgressDomain: {
                 summary: z.ZodOptional<z.ZodString>;
                 ttfdDays: z.ZodNullable<z.ZodNumber>;
                 effortDays: z.ZodNullable<z.ZodNumber>;
+                effortUnit: z.ZodOptional<z.ZodEnum<{
+                    "build-day": "build-day";
+                }>>;
+                effortRevisions: z.ZodOptional<z.ZodArray<z.ZodObject<{
+                    at: z.ZodString;
+                    from: z.ZodNullable<z.ZodNumber>;
+                    to: z.ZodNullable<z.ZodNumber>;
+                    unit: z.ZodOptional<z.ZodEnum<{
+                        "build-day": "build-day";
+                    }>>;
+                    note: z.ZodOptional<z.ZodString>;
+                }, z.core.$strip>>>;
                 revenuePerMonth: z.ZodNullable<z.ZodNumber>;
                 currency: z.ZodString;
                 confidence: z.ZodNumber;

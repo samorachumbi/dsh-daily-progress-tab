@@ -21,7 +21,7 @@
  *
  * @module dsh-daily-progress-tab/projects
  */
-import type { Checkin, Monitoring, Project, ProjectRubric, ProjectScore, ProjectSparks, RankedProject, RubricDimension, Spark, SparkBoard } from './types.ts';
+import type { Checkin, DayPlan, Monitoring, Project, ProjectRubric, ProjectScore, ProjectSparks, RankedProject, RubricDimension, Spark, SparkBoard } from './types.ts';
 export declare const MAX_TTFD_DAYS = 3650;
 export declare const MAX_EFFORT_DAYS = 3650;
 export declare const MAX_NAME = 120;
@@ -84,7 +84,11 @@ export declare function summarizeSparks(sparks: readonly Spark[], today: string)
  */
 export declare function sparkBoard(sparks: readonly Spark[], today: string): SparkBoard;
 /** Shipped — the project is in the world and must now be MEASURED. */
-export declare function rankProjects(projects: readonly Project[], checkins?: readonly Checkin[], today?: string, sparks?: readonly Spark[]): RankedProject[];
+export declare function rankProjects(projects: readonly Project[], checkins?: readonly Checkin[], today?: string, sparks?: readonly Spark[], 
+/** Every day plan, so burn measures what was actually FINISHED rather than what was intended. */
+plans?: readonly DayPlan[], 
+/** The effective daily build budget in hours — one build-day is this many hours. */
+budgetHours?: number): RankedProject[];
 export type Normalized<T> = {
     ok: true;
     value: T;

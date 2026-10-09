@@ -1,6 +1,6 @@
 {
   "name": "dsh-daily-progress-tab",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH daily progress planner in its own browser tab, plus agent tools: today's checklist, tomorrow's plan, week heatmap, streak, and per-task suggestion chips the model can author.",
   "keywords": [
     "dsh",

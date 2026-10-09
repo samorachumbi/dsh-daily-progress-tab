@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { addDays, computeStreak, rollover, weekCells, weekRate } from './metrics.ts'
 import { DATE_RE, DEFAULT_SCOPE, isValidDateKey, recordKey } from './calendar.ts'
-import { CHECKIN_VERDICTS, MAX_CHECKIN_ITEMS, MAX_SUGGESTIONS } from './domain.ts'
+import { CHECKIN_VERDICTS, MAX_BUDGET_HOURS, MAX_CHECKIN_ITEMS, MAX_SUGGESTIONS, MAX_TASK_HOURS, MIN_BUDGET_HOURS, MIN_TASK_HOURS } from './domain.ts'
 import type { DailyProgressDomainSpec } from './domain.ts'
 import { MAX_CHECKIN_TEXT, MAX_NAME, MAX_SPARKS, MAX_SUMMARY, normalizeProject, rankProjects, scoreProject, sparkBoard } from './projects.ts'
 import { MAX_PLUGIN_REF, NO_PUBLISH_SETTINGS, PLUGIN_ORIGINS, PLUGIN_STATUSES, PLUGIN_VISIBILITIES, portfolioView } from './portfolio.ts'
@@ -26,6 +26,7 @@ import type {
   PlanItem, PluginOrigin, PluginRecord, PluginStatus, PluginVisibility, PoolEntry, NowTask, Project,
   Snapshot, Spark, TaskSuggestion,
 } from './types.ts'
+import { effectiveBudget, summarizeBuild } from './build.ts'
 
 export const MAX_ITEMS = 50
 export const MAX_TEXT = 500
@@ -105,7 +106,7 @@ export function buildNewItems(
     if (typeof entry !== 'object' || entry === null) {
       return err('invalid_payload', at + ' must be an object')
     }
-    const raw = entry as { text?: unknown; summary?: unknown }
+    const raw = entry as { text?: unknown; summary?: unknown; estHours?: unknown }
     const text = normalizeText(raw.text)
     if (text === null) {
       return err('empty_text', at + ' (' + errorPreview(raw.text) + '): text must be 1-' + MAX_TEXT + ' chars')
@@ -121,6 +122,21 @@ export function buildNewItems(
         )
       }
       item.summary = summary
+    }
+    // Optional estimate per task. This is the batch path `daily_plan_project`
+    // uses, which is exactly where estimates matter most: a project broken into
+    // a day's work should arrive already sized.
+    if (raw.estHours !== undefined && raw.estHours !== null && raw.estHours !== '') {
+      if (typeof raw.estHours !== 'number' || !Number.isFinite(raw.estHours)) {
+        return err('invalid_payload', at + ' (' + errorPreview(text) + '): estHours must be a number or null')
+      }
+      if (raw.estHours < MIN_TASK_HOURS || raw.estHours > MAX_TASK_HOURS) {
+        return err(
+          'invalid_payload',
+          at + ' (' + errorPreview(text) + '): estHours must be between ' + MIN_TASK_HOURS + ' and ' + MAX_TASK_HOURS,
+        )
+      }
+      item.estHours = raw.estHours
     }
     items.push(item)
   }
@@ -152,6 +168,9 @@ export function createPlanner(
     (await table()).get(recordKey(DEFAULT_SCOPE, date)) ?? null
   const store = async (plan: DayPlan): Promise<void> =>
     (await table()).put(recordKey(DEFAULT_SCOPE, plan.date), plan)
+  /** Every stored day plan — the input to build burn and the capacity window. */
+  const listPlans = async (): Promise<DayPlan[]> =>
+    [...(await table()).entries()].map(([, plan]) => plan)
 
   // ---- projects + the selection singleton ----------------------------------
   let projectsPromise: Promise<KvTable<string, Project>> | null = null
@@ -371,6 +390,8 @@ export function createPlanner(
     selectedProjectId: string | null
     selectedItemId?: string | null
     selectedItemDate?: string | null
+    /** The daily build budget in hours. Optional like the fields above: a global written before it existed must stay valid. */
+    budgetHours?: number | null
     updatedAt: string
   }
   const globalState = async (): Promise<GlobalState> => (await domainPromise).global.get()
@@ -381,6 +402,14 @@ export function createPlanner(
   /** Which project is being executed. */
   const selection = async (): Promise<string | null> => (await globalState()).selectedProjectId
   const select = async (id: string | null): Promise<void> => patchGlobal({ selectedProjectId: id })
+  /**
+   * The effective daily build budget: the stored value clamped, or the default.
+   * Read through {@link effectiveBudget} rather than trusted, so an absent or
+   * corrupt value cannot become a zero budget.
+   */
+  const budget = async (): Promise<number> => effectiveBudget((await globalState()).budgetHours)
+  /** Set the daily build budget. Goes through patchGlobal, so it cannot erase a selection. */
+  const setBudget = async (hours: number): Promise<void> => patchGlobal({ budgetHours: hours })
   /** Which task is being worked on: an id plus the day it was on when picked. */
   const nowSelection = async (): Promise<{ id: string | null; date: string | null }> => {
     const state = await globalState()
@@ -485,6 +514,11 @@ export function createPlanner(
     await ensureToday(date, tz)
     liveTable = await table()
     const pool = buildPool(date)
+    // Read ONCE: burn, the capacity window and today's load all describe the same
+    // store, and three separate reads could disagree while a write is in flight.
+    const plans = await listPlans()
+    const budgetHours = await budget()
+    const todayPlan = syncLookup(date)
     return {
       today: syncLookup(date),
       tomorrow: syncLookup(addDays(date, 1)),
@@ -492,13 +526,15 @@ export function createPlanner(
       streak: computeStreak(syncLookup, date),
       weekRate: weekRate(syncLookup, date),
       // Ranked on every read, so the order can never drift from the inputs.
-      projects: rankProjects(await listProjects(), await listCheckins(), date, await listSparks()),
+      projects: rankProjects(await listProjects(), await listCheckins(), date, await listSparks(), plans, budgetHours),
       selectedProjectId: await selection(),
       now: resolveNow(date, await nowSelection(), pool),
       pool,
       backlog: await listBacklog(),
       sparks: sparkBoard(await listSparks(), date),
       portfolio: portfolioView(await listPlugins(), date, publish),
+      build: summarizeBuild(todayPlan?.items ?? [], plans, date, budgetHours),
+      budgetHours,
     }
   }
 
@@ -702,6 +738,18 @@ export function createPlanner(
             const summary = normalizeText(payload.summary)
             if (summary === null) return err('invalid_payload', 'summary must be 1-500 chars')
             item.summary = summary
+          }
+          // Optional estimate, so one call can schedule a task that is already
+          // sized. Absent stays absent — an unestimated task is reportable as
+          // such, and defaulting it to zero would make a plan look like it fits.
+          if (payload.estHours !== undefined && payload.estHours !== null && payload.estHours !== '') {
+            if (typeof payload.estHours !== 'number' || !Number.isFinite(payload.estHours)) {
+              return err('invalid_payload', 'estHours must be a number or null')
+            }
+            if (payload.estHours < MIN_TASK_HOURS || payload.estHours > MAX_TASK_HOURS) {
+              return err('invalid_payload', 'estHours must be between ' + MIN_TASK_HOURS + ' and ' + MAX_TASK_HOURS)
+            }
+            item.estHours = payload.estHours
           }
           if (typeof payload.projectId === 'string' && payload.projectId.length > 0) {
             if (!(await listProjects()).some((project) => project.id === payload.projectId)) {
@@ -997,6 +1045,21 @@ export function createPlanner(
               patch.summary = text
             }
           }
+          // Same contract as `summary` above: undefined means "not supplied",
+          // null or '' means "clear the estimate".
+          if (payload.estHours !== undefined) {
+            if (payload.estHours === null || payload.estHours === '') {
+              patch.estHours = undefined
+            } else {
+              if (typeof payload.estHours !== 'number' || !Number.isFinite(payload.estHours)) {
+                return err('invalid_payload', 'estHours must be a number or null')
+              }
+              if (payload.estHours < MIN_TASK_HOURS || payload.estHours > MAX_TASK_HOURS) {
+                return err('invalid_payload', 'estHours must be between ' + MIN_TASK_HOURS + ' and ' + MAX_TASK_HOURS)
+              }
+              patch.estHours = payload.estHours
+            }
+          }
           if (payload.projectId !== undefined) {
             if (payload.projectId === null || payload.projectId === '') {
               patch.projectId = undefined
@@ -1009,6 +1072,20 @@ export function createPlanner(
             }
           }
           await store(touch(plan, plan.items.map((item) => (item.id === found.id ? { ...item, ...patch } : item))))
+          return done()
+        }
+        case 'setBudget': {
+          const hours = payload.hours
+          if (typeof hours !== 'number' || !Number.isFinite(hours)) {
+            return err('invalid_payload', 'hours must be a number')
+          }
+          if (hours < MIN_BUDGET_HOURS || hours > MAX_BUDGET_HOURS) {
+            return err(
+              'invalid_payload',
+              'hours must be between ' + MIN_BUDGET_HOURS + ' and ' + MAX_BUDGET_HOURS,
+            )
+          }
+          await setBudget(hours)
           return done()
         }
         case 'addProject': {

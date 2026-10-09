@@ -123,6 +123,54 @@ time-to-first-dollar it sorts after every scored project and is labelled **UNRAN
 seven-dimension rubric is a **gate, not a score**: the lowest dimension is reported as
 `weakest: <dimension>` rather than averaged away. The rubric, the score and the discounting live in `src/projects.ts`.
 
+## Build time — one build-day is five hours
+
+`effortDays` divides that score, and **the unit it was measured in used to be undefined**: "5" could
+have meant five 8-hour days or five calendar days of intermittent attention, and nothing recorded
+which. So the unit is stated, and it is configurable.
+
+- **1 build-day = `budgetHours` hours, default 5.** Set it with `daily_capacity({hours})`; five
+  build-days is a week. `DEFAULT_BUDGET_HOURS` is deliberately **provisional** — set it from the
+  measurement below, never from a guess, because an assumed capacity makes every burn ratio noise.
+- **`effortDays` is the effort REMAINING**, not the total ever spent. WSJF's denominator is job size,
+  and job size is what is left — a project that is nearly finished should score *higher*, not lower.
+  Identical for anything not yet started.
+- **`Project.effortUnit === 'build-day'`** marks an estimate as measured in this unit. **Absent means
+  unstated**, and burn then withholds its ratio and reports `ratioBlockedBy: 'pre-unit'`. An estimate
+  written before the unit existed is a count of work-chunks, and dividing hours by it yields a
+  percentage that fails toward a **false overrun** — which would stop a build that is inside budget.
+
+### Estimates are fluid, and the trail is what makes that safe
+
+An `effortDays` is the current best guess, not a commitment: it is re-stated once a project is being
+worked on, because a week of sized tasks replaces the guess with a measurement. Every revision is
+recorded — `{at, from, to, unit, note}` on `Project.effortRevisions` — appended **only when a value
+actually moved**, capped at 20 dropping the oldest, and the card shows `estimate revised Nx`. Raising
+an estimate whenever it is exceeded is the one move that would make every overrun flag meaningless.
+
+### The day's load, and the measured capacity
+
+Tasks carry **`estHours`**. A task with no estimate reads **`?h`** and is counted in an `unestimated`
+tally — never treated as free, because "unknown" and "free" are different claims and only the first is
+true. The page shows `Build: 6.5h of 5h · 130%`, with over-budget marked by colour **and** a dashed
+top edge rather than by hue alone.
+
+**`daily_capacity` reports the measured capacity** — the estimated hours actually *finished* per
+working day over the trailing 7 days — and the budget should be set FROM that reading. Only days that
+finished estimated work are sampled, so a day off does not read as a collapse in output; no samples
+reports `null`, never `0`, because "no data yet" and "you achieve nothing" are different claims; and
+it counts finished work only, so it is deliberately a **lower bound**.
+
+### Burn, and the caveat that travels with it
+
+Each project shows build-days consumed against `effortDays`, with `unestimatedDone` surfaced beside
+it: every finished task carrying no estimate makes the burn a **lower bound**, and a project showing
+"1.2 of 5 days" whose twenty finished tasks were never sized has not been measured at all. `ratio` is
+`null` while nothing has been consumed, so an unstarted project cannot read as *"0% — comfortably
+inside estimate"*. At **1.5×** estimate the project is flagged
+**`overrun` — stop and re-estimate before continuing**, which is a pre-agreed response rather than a
+number to scroll past. Logic: `src/build.ts`; the unit constants: `src/budget.ts`.
+
 ## The feedback loop (Live)
 
 A shipped project is not finished, it is **live**. Each project carries a `metricName` — the *one*
@@ -207,7 +255,7 @@ conversationally:
 | Tool | What it does |
 |---|---|
 | `daily_plan` | read the WHOLE board: now, today, tomorrow, the pool and the backlog |
-| `daily_add_task` | schedule a task on today or tomorrow |
+| `daily_add_task` | schedule a task on today or tomorrow, with an optional `estHours` |
 | `daily_set_task_done` | complete (`done:true`) or reopen (`done:false`) a task |
 | `daily_edit_task` | rewrite a task's text |
 | `daily_move_task` | move a task to another date — defer, reschedule, or pull one forward with `fromDate` |
@@ -215,15 +263,16 @@ conversationally:
 | `daily_now` | pick, change or clear the ONE task being worked on |
 | `daily_remove_task` | delete a task |
 | `daily_suggest` | attach a row of suggestion chips to a task |
-| `daily_update_task` | change a task's summary box or project link |
+| `daily_update_task` | change a task's summary box, project link or `estHours` |
 | `daily_backlog_add` | add an **unscheduled** candidate task to a project |
 | `daily_backlog_plan` | schedule a candidate onto a day (optionally `select:true` to start it now) |
 | `daily_backlog_remove` | drop a candidate that is not wanted after all |
 | `daily_projects` | read the ranked board |
 | `daily_add_project` | add a venture (name, who it serves, estimates, rubric) |
-| `daily_update_project` | change estimates, rubric, status, kill-switch, `metricName` |
+| `daily_update_project` | change estimates (`effortDays` in build-days + its `effortUnit`, with an `effortNote` for the revision trail), rubric, status, kill-switch, `metricName` |
 | `daily_select_project` | choose what is being executed (`idea`/`parked` → `active`) |
-| `daily_plan_project` | break a project into linked daily tasks in one call |
+| `daily_plan_project` | break a project into linked daily tasks in one call, each able to carry its `estHours` |
+| `daily_capacity` | read the **measured** build capacity and set the daily budget from it — one build-day is the budget in hours |
 | `daily_live` | read the Live board: money, metric, hurdles, corrections, verdicts, staleness |
 | `daily_plugins` | read the plugin portfolio register: origin, licence, publication state, and the blockers before publication |
 | `daily_plugin` | record or update ONE plugin (origin is required: ours / fork / third-party) |
@@ -373,9 +422,15 @@ The model authors the content; the plugin never calls a model itself.
 | `GET /daily-progress-tab/export/readme` | the public résumé section as markdown, generated from the register |
 | `GET /daily-progress-tab/export/site` | the same records as a standalone page (what a Pages site would serve) |
 
-Ops (17): `toggleItem` · `addItem` · `removeItem` · `editItemText` · `updateItem` · `setTomorrow` ·
-`clearToday` · `moveItem` · `splitItem` · `setSuggestions` · `applySuggestion` · `addProject` ·
-`updateProject` · `removeProject` · `selectProject` · `logCheckin` · `checkinItem`
+Ops (18): `toggleItem` · `addItem` · `addItems` · `removeItem` · `editItemText` · `updateItem` ·
+`setTomorrow` · `clearToday` · `moveItem` · `splitItem` · `setSuggestions` · `applySuggestion` ·
+`addProject` · `updateProject` · `removeProject` · `selectProject` · `logCheckin` · `checkinItem`
+
+`addItems` adds many items to ONE day in a single write. It exists because a loop of `addItem` calls
+is **not atomic**: a validation error part-way through left the earlier tasks stored and the rest
+missing, so the caller saw a failure *and* a half-written day it could not safely retry (retrying
+duplicates the tasks that did land). Everything is validated before anything is written, and every
+error names which item was at fault.
 
 `match` is the text matcher; `text` is always a text *value*. Keeping them separate matters:
 letting `text` serve both made `editItemText` read one field for two purposes and silently no-op.
@@ -590,9 +645,17 @@ harness and the two-theme rule.
 
 **Added:** the standalone planner tab (no client bundle, so nothing for `dsh-client-modules` to
 compose), the ranked projects board, the Working/Pending/Live columns, the check-in feedback loop
-with staleness flagging, a per-project backlog, a task-level Now pick, the 29 agent tools, suggestion
+with staleness flagging, a per-project backlog, a task-level Now pick, the 30 agent tools, suggestion
 chips, bubble headings, the `timezone` / `publishOwner` / `leakScan` config fields,
 and the optional-`tools` registration.
+
+**Added — build time (0.2.0):** a stated unit for the effort estimate (one build-day is `budgetHours`
+hours, default 5), `estHours` on every task, a day-budget bar and per-task hour chips, per-project
+burn against `effortDays` with the `unestimatedDone` caveat that keeps it honest, the `daily_capacity`
+tool that **measures** real capacity instead of assuming it, a **pre-unit** fallback that withholds a
+burn ratio rather than dividing hours by an unstated unit — and a **revision trail** that keeps a
+deliberately fluid estimate from becoming a rubber stamp. See **Build time** above; logic in
+`src/build.ts`, unit constants in `src/budget.ts`.
 
 **`./invariant` companion** — the harness convention every package here follows: it registers this
 package's own runtime contracts with `@deepseek-ai/dsh-invariants`, so a divergence fails loudly and
